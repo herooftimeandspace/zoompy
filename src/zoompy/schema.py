@@ -31,12 +31,23 @@ from jsonschema import Draft202012Validator
 
 @dataclass(frozen=True)
 class SchemaOperation:
-    """One path-based HTTP operation extracted from an OpenAPI document."""
+    """One path-based HTTP operation extracted from an OpenAPI document.
+
+    The runtime validator only needs method, path, and response schemas, but
+    the new SDK layer also needs a little more metadata so it can expose
+    ergonomic Python methods on top of the generic request client. We keep that
+    metadata here so both layers read from the same canonical OpenAPI source.
+    """
 
     schema_name: str
     method: str
     template_path: str
     path_regex: re.Pattern[str]
+    operation_id: str
+    summary: str | None
+    description: str | None
+    parameters: tuple[Any, ...]
+    has_request_body: bool
     responses: Mapping[str, Any]
     spec: Mapping[str, Any]
     server_url: str | None
@@ -454,6 +465,7 @@ class PathOperationIndex:
         self._resource_root = resource_root or resources.files("zoompy")
         self._path_root_names = path_root_names
         self._operations_by_prefix: dict[str, list[SchemaOperation]] = {}
+        self._all_operations: list[SchemaOperation] = []
         self._load_operations()
 
     def find_operation(
@@ -517,6 +529,26 @@ class PathOperationIndex:
             return operation.server_url.rstrip("/")
         return fallback.rstrip("/")
 
+    def iter_operations(self) -> tuple[SchemaOperation, ...]:
+        """Return all indexed operations in a stable order.
+
+        The SDK layer walks the full operation list to build namespace objects
+        like `client.phone.users.get(...)`. Returning a sorted tuple keeps that
+        build process deterministic and easy to reason about in tests.
+        """
+
+        return tuple(
+            sorted(
+                self._all_operations,
+                key=lambda item: (
+                    item.schema_name,
+                    item.template_path,
+                    item.method,
+                    item.operation_id,
+                ),
+            )
+        )
+
     def _candidate_operations(
         self,
         raw_path: str,
@@ -564,12 +596,38 @@ class PathOperationIndex:
                             method=method.upper(),
                             template_path=path,
                             path_regex=self._compile_path_regex(path),
+                            operation_id=str(
+                                operation.get("operationId")
+                                or f"{method}_{path.strip('/').replace('/', '_')}"
+                            ),
+                            summary=(
+                                str(operation["summary"])
+                                if isinstance(operation.get("summary"), str)
+                                else None
+                            ),
+                            description=(
+                                str(operation["description"])
+                                if isinstance(operation.get("description"), str)
+                                else None
+                            ),
+                            parameters=tuple(
+                                item
+                                for item in [
+                                    *(path_item.get("parameters", []) or []),
+                                    *(operation.get("parameters", []) or []),
+                                ]
+                            ),
+                            has_request_body=isinstance(
+                                operation.get("requestBody"),
+                                Mapping,
+                            ),
                             responses=operation.get("responses", {}),
                             spec=spec,
                             server_url=server_url,
                         )
                         prefix = self._path_prefix(path)
                         self._operations_by_prefix.setdefault(prefix, []).append(entry)
+                        self._all_operations.append(entry)
 
     def _iter_schema_files(self, root: Any) -> Iterable[Path]:
         """Recursively yield packaged JSON schema files from a traversable root."""
@@ -881,6 +939,16 @@ class SchemaRegistry:
             raw_path=raw_path,
             actual_path=actual_path,
         )
+
+    def iter_operations(self) -> tuple[SchemaOperation, ...]:
+        """Expose all path-based operations for the SDK layer.
+
+        `ZoomClient.request()` still uses targeted lookups for execution, but
+        the SDK builder needs to inspect the whole OpenAPI inventory once so it
+        can construct namespace proxies and operation callables.
+        """
+
+        return self._index.iter_operations()
 
     def _pick_response_schema(
         self,

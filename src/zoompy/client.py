@@ -1,9 +1,9 @@
 """Unified Zoom API client for the `zoompy` package.
 
-The library intentionally exposes one public request method instead of dozens of
-hand-written endpoint classes. The repository's contract tests are already
-schema-driven, so a generic client maps naturally to that testing strategy and
-keeps the production code easy to extend.
+The low-level runtime core is still the generic `request()` method because that
+is where authentication, retries, logging, and schema validation belong.
+On top of that core, the client now exposes a schema-driven SDK surface such as
+`client.users.get(...)` and `client.phone.users.list(...)`.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ import httpx
 from .auth import OAuthTokenManager
 from .config import ZoomSettings
 from .logging import get_logger
+from .sdk import ZoomSdk
 from .schema import SchemaRegistry, WebhookRegistry
 
 
@@ -109,6 +110,7 @@ class ZoomClient:
         self._webhooks = webhook_registry or WebhookRegistry()
         self._http = http_client or httpx.Client()
         self._owns_http_client = http_client is None
+        self._sdk: ZoomSdk | None = None
         self._token_manager = OAuthTokenManager(
             http_client=self._http,
             oauth_url=settings.oauth_url,
@@ -129,6 +131,28 @@ class ZoomClient:
 
         self.close()
 
+    def __getattr__(self, name: str) -> Any:
+        """Expose generated SDK namespaces as top-level client attributes.
+
+        This keeps the original low-level API intact while also enabling
+        ergonomic access patterns such as `client.users.list(...)` and
+        `client.phone.users.get(...)`.
+        """
+
+        sdk = self.sdk
+        if sdk.has_member(name):
+            return sdk.get_member(name)
+        raise AttributeError(f"{type(self).__name__!s} has no attribute {name!r}")
+
+    def __dir__(self) -> list[str]:
+        """Include generated SDK namespaces in interactive discovery."""
+
+        names = set(super().__dir__())
+        sdk = getattr(self, "_sdk", None)
+        if sdk is not None:
+            names.update(dir(sdk))
+        return sorted(names)
+
     def close(self) -> None:
         """Close the underlying HTTP client when this instance owns it."""
 
@@ -139,6 +163,19 @@ class ZoomClient:
         """Expose token acquisition for integration tests and advanced callers."""
 
         return self._token_manager.get_access_token(timeout=timeout)
+
+    @property
+    def sdk(self) -> ZoomSdk:
+        """Return the lazily constructed dynamic SDK root.
+
+        The generic request client remains the runtime core, but many users want
+        a friendlier service-object surface for automation scripts. Building the
+        SDK lazily avoids work for callers that only ever use `request()`.
+        """
+
+        if self._sdk is None:
+            self._sdk = ZoomSdk(client=self, schema_registry=self._schemas)
+        return self._sdk
 
     def validate_webhook(
         self,
