@@ -7,6 +7,7 @@ the same schema families correctly. These tests stay narrow on purpose:
 * one test proves `SchemaRegistry` indexes a master-account path
 * one test proves `ZoomClient.validate_webhook()` uses the runtime webhook
   registry rather than only the test-only helpers
+* one test proves ambiguous webhook lookups require extra disambiguation
 
 That gives future maintainers a fast signal if the production schema layer
 drifts away from the repository's sync and test structure.
@@ -17,6 +18,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from zoompy import ZoomClient, WebhookRegistry
 from zoompy.schema import SchemaRegistry
@@ -147,3 +150,61 @@ def test_zoom_client_validates_webhooks_with_runtime_registry(
         )
     finally:
         client.close()
+
+
+def test_webhook_registry_requires_disambiguation_for_duplicate_events(
+    tmp_path: Path,
+) -> None:
+    """Require callers to narrow duplicate event names explicitly.
+
+    The runtime webhook API accepts plain `event_name` lookups for convenience,
+    but some event names could plausibly appear in more than one schema family.
+    In that case we want a loud, predictable failure rather than silently
+    picking one document and validating against the wrong contract.
+    """
+
+    shared_webhook = {
+        "openapi": "3.1.0",
+        "webhooks": {
+            "meeting.started": {
+                "post": {
+                    "requestBody": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "event": {"type": "string"},
+                                    },
+                                    "required": ["event"],
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    }
+
+    _write_json(
+        tmp_path / "webhooks" / "workplace" / "Meetings.json",
+        {
+            **shared_webhook,
+            "info": {"title": "Meetings"},
+        },
+    )
+    _write_json(
+        tmp_path / "webhooks" / "marketplace" / "Marketplace.json",
+        {
+            **shared_webhook,
+            "info": {"title": "Marketplace"},
+        },
+    )
+
+    registry = WebhookRegistry(resource_root=tmp_path)
+
+    with pytest.raises(ValueError, match="ambiguous"):
+        registry.validate_webhook(
+            event_name="meeting.started",
+            payload={"event": "meeting.started"},
+        )

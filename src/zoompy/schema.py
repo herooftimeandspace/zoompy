@@ -155,6 +155,18 @@ class OpenApiSchemaTools:
                     normalized[key] = [self.normalize_schema(item) for item in value]
                 else:
                     normalized[key] = value
+
+            properties = normalized.get("properties")
+            required = normalized.get("required")
+            if isinstance(properties, Mapping) and isinstance(required, list):
+                synthesized = dict(properties)
+                changed = False
+                for name in required:
+                    if isinstance(name, str) and name not in synthesized:
+                        synthesized[name] = {}
+                        changed = True
+                if changed:
+                    normalized["properties"] = synthesized
             return normalized
 
         if isinstance(schema, list):
@@ -194,16 +206,31 @@ class OpenApiSchemaTools:
         """Return a canonical JSON Schema type name when recognizable."""
 
         lowered = value.lower()
-        known_types = {
-            "array",
-            "boolean",
-            "integer",
-            "number",
-            "object",
-            "string",
+        type_map = {
+            "array": "array",
+            "boolean": "boolean",
+            "integer": "integer",
+            "int64": "integer",
+            "long": "integer",
+            "number": "number",
+            "object": "object",
+            "string": "string",
         }
-        if lowered in known_types:
-            return lowered
+        if lowered in type_map:
+            return type_map[lowered]
+        if any(
+            token in lowered
+            for token in (
+                "enum",
+                "country",
+                "states",
+                "city",
+                "campus",
+                "building",
+                "floor",
+            )
+        ):
+            return "string"
         return value
 
     def _normalize_composed_payload(
