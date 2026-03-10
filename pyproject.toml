@@ -3,11 +3,11 @@ requires = ["hatchling>=1.24.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "zoomapi"
+name = "zoompy"
 version = "0.1.0"
-description = "A Zoom API client built with Python (TDD-first)."
+description = "A production-ready unified Zoom API client with schema validation."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 license = { text = "MIT" }
 authors = [{ name = "Your Name" }]
 dependencies = [
@@ -24,23 +24,33 @@ dev = [
   "mypy>=1.10.0",
 ]
 
+[tool.hatch.build]
+include = [
+  "src/zoompy/**",
+  "README.md",
+  "LICENSE",
+]
+
 [tool.hatch.build.targets.wheel]
-packages = ["src/zoomapi"]
+packages = ["src/zoompy"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["src/tests"]
 addopts = "-q"
+markers = [
+  "integration: marks tests that require live Zoom credentials",
+]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
 ignore = ["E501"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.14"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
