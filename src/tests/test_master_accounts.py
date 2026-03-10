@@ -18,78 +18,57 @@ contract logic diverge.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
 
 import pytest
+from _path_schema_suite import (
+    build_parametrization,
+    fixture_name_for_spec_path,
+    load_titled_spec,
+    request_headers_for_spec_path,
+    schema_paths,
+    spec_title,
+)
 
 from _openapi_contract import (
     build_operation_cases,
     get_request_callable,
-    load_openapi_spec,
     run_operation_contract,
-    snake_case,
     validate_response_examples,
 )
 
 MASTER_ACCOUNT_ROOT = Path(__file__).resolve().parent / "master_accounts"
 
-# Master-account APIs still run through the same production request method, so
-# they reuse the exact same fixture naming conventions as the ordinary endpoint
-# suite. These small overrides preserve existing historical fixture names.
-FIXTURE_NAME_OVERRIDES = {
-    "SCIM2": "scim_client",
-    "Workforce Management": "workforce_client",
-}
-
-REQUEST_HEADERS_OVERRIDES = {
-    "SCIM2": {"accept": "application/scim+json"},
-}
-
 
 def _schema_paths() -> list[Path]:
     """Return the mirrored master-account schema files currently on disk."""
 
-    return sorted(MASTER_ACCOUNT_ROOT.rglob("*.json"))
+    return schema_paths(MASTER_ACCOUNT_ROOT)
 
 
 def _load_spec(path: Path) -> dict[str, Any]:
     """Load one master-account OpenAPI file and require a document title."""
 
-    spec = load_openapi_spec(path)
-    title = spec.get("info", {}).get("title")
-    if not isinstance(title, str) or not title:
-        raise AssertionError(
-            f"Master-account spec at {path} is missing info.title."
-        )
-    return spec
+    return load_titled_spec(path, suite_label="Master-account")
 
 
 def _spec_title(spec: dict[str, Any]) -> str:
     """Return the document title used for readable pytest ids."""
 
-    return str(spec.get("info", {}).get("title", "")).strip()
+    return spec_title(spec)
 
 
 def _fixture_name_for_spec_path(path: Path) -> str:
     """Return the pytest fixture name that should service one schema family."""
 
-    stem = path.stem
-    override = FIXTURE_NAME_OVERRIDES.get(stem)
-    if override is not None:
-        return override
-    normalized = re.sub(r"[^A-Za-z0-9]+", "_", stem).strip("_").lower()
-    return f"{normalized}_client"
+    return fixture_name_for_spec_path(path)
 
 
 def _request_headers_for_spec_path(path: Path) -> dict[str, str] | None:
     """Return any schema-family-specific request headers."""
 
-    headers = REQUEST_HEADERS_OVERRIDES.get(path.stem)
-    if headers is None:
-        return None
-    return dict(headers)
+    return request_headers_for_spec_path(path)
 
 
 @pytest.fixture(params=_schema_paths(), ids=lambda path: path.stem)
@@ -155,19 +134,7 @@ def pytest_generate_tests(metafunc: Any) -> None:
     if "master_account_case" not in metafunc.fixturenames:
         return
 
-    parameters: list[Any] = []
-    ids: list[str] = []
-    for spec_path in _schema_paths():
-        spec = _load_spec(spec_path)
-        title = _spec_title(spec)
-        fixture_name = _fixture_name_for_spec_path(spec_path)
-        request_headers = _request_headers_for_spec_path(spec_path)
-        for case in build_operation_cases(spec):
-            parameters.append((spec_path, spec, fixture_name, request_headers, case))
-            ids.append(
-                f"{snake_case(title)}:"
-                f"{snake_case(case.operation_id)}[{case.method} {case.path}]"
-            )
+    parameters, ids = build_parametrization(MASTER_ACCOUNT_ROOT)
 
     metafunc.parametrize(
         (

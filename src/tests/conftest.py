@@ -12,8 +12,8 @@ library behavior, not a parallel testing adapter with its own custom logic.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
 import sys
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -56,164 +56,59 @@ def _request_callable(client: ZoomClient) -> RequestCallable:
     return client.request
 
 
-# Each endpoint fixture is intentionally a tiny alias to the same client
-# request method. The distinct fixture names are preserved because the existing
-# tests already depend on them and we do not want to restructure the suites.
-@pytest.fixture
-def accounts_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
+_CLIENT_FIXTURE_NAMES = (
+    "accounts_client",
+    "ai_companion_client",
+    "auto_dialer_client",
+    "calendar_client",
+    "chatbot_client",
+    "clips_client",
+    "cobrowse_sdk_client",
+    "commerce_client",
+    "conference_room_connector_client",
+    "contact_center_client",
+    "events_client",
+    "healthcare_client",
+    "mail_client",
+    "marketplace_client",
+    "meetings_client",
+    "number_management_client",
+    "phone_client",
+    "qss_client",
+    "quality_management_client",
+    "revenue_accelerator_client",
+    "rooms_client",
+    "scheduler_client",
+    "scim_client",
+    "tasks_client",
+    "team_chat_client",
+    "users_client",
+    "video_management_client",
+    "video_sdk_client",
+    "virtual_agent_client",
+    "whiteboard_client",
+    "workforce_client",
+    "zoom_docs_client",
+)
 
 
-@pytest.fixture
-def ai_companion_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
+def _make_client_fixture(name: str) -> Any:
+    """Create one tiny pytest fixture that aliases `zoom_client.request`.
+
+    The contract suites intentionally preserve many historical fixture names so
+    the schema-family tests stay readable. Generating the fixtures from one list
+    keeps that compatibility without maintaining dozens of identical functions.
+    """
+
+    @pytest.fixture(name=name)
+    def _fixture(zoom_client: ZoomClient) -> RequestCallable:
+        return _request_callable(zoom_client)
+
+    _fixture.__name__ = name
+    return _fixture
 
 
-@pytest.fixture
-def auto_dialer_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
+for _fixture_name in _CLIENT_FIXTURE_NAMES:
+    globals()[_fixture_name] = _make_client_fixture(_fixture_name)
 
-
-@pytest.fixture
-def calendar_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def chatbot_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def clips_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def cobrowse_sdk_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def commerce_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def conference_room_connector_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def contact_center_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def events_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def healthcare_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def mail_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def marketplace_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def meetings_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def number_management_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def phone_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def qss_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def quality_management_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def revenue_accelerator_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def rooms_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def scheduler_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def scim_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def tasks_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def team_chat_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def users_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def video_management_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def video_sdk_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def virtual_agent_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def whiteboard_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def workforce_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
-
-
-@pytest.fixture
-def zoom_docs_client(zoom_client: ZoomClient) -> RequestCallable:
-    return _request_callable(zoom_client)
+del _fixture_name

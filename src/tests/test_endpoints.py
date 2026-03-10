@@ -20,58 +20,45 @@ used.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
 
 import pytest
+from _path_schema_suite import (
+    build_parametrization,
+    fixture_name_for_spec_path,
+    load_titled_spec,
+    request_headers_for_spec_path,
+    schema_paths,
+    spec_title,
+)
 
 from _openapi_contract import (
     build_operation_cases,
     get_request_callable,
-    load_openapi_spec,
     run_operation_contract,
-    snake_case,
     validate_response_examples,
 )
 
 SCHEMA_ROOT = Path(__file__).resolve().parent / "endpoints"
 
-# Most fixture names follow a direct snake_case(title) + "_client" convention.
-# Only the entries listed here intentionally keep a different historical name.
-FIXTURE_NAME_OVERRIDES = {
-    "SCIM2": "scim_client",
-    "Workforce Management": "workforce_client",
-}
-
-# SCIM uses a JSON media type variant and the existing contract suite has always
-# asserted the `Accept` header explicitly. Keeping that override here preserves
-# the old behavior while allowing the rest of the endpoint suite to stay generic.
-REQUEST_HEADERS_OVERRIDES = {
-    "SCIM2": {"accept": "application/scim+json"},
-}
-
 
 def _schema_paths() -> list[Path]:
     """Return the endpoint schema files mirrored into the test tree."""
 
-    return sorted(SCHEMA_ROOT.rglob("*.json"))
+    return schema_paths(SCHEMA_ROOT)
 
 
 def _load_spec(path: Path) -> dict[str, Any]:
     """Load one endpoint OpenAPI file and require a non-empty document title."""
 
-    spec = load_openapi_spec(path)
-    title = spec.get("info", {}).get("title")
-    if not isinstance(title, str) or not title:
-        raise AssertionError(f"Endpoint spec at {path} is missing info.title.")
-    return spec
+    return load_titled_spec(path, suite_label="Endpoint")
 
 
 def _spec_title(spec: dict[str, Any]) -> str:
     """Return the OpenAPI document title from a loaded spec."""
 
-    return str(spec.get("info", {}).get("title", "")).strip()
+    return spec_title(spec)
 
 
 def _fixture_name_for_spec_path(path: Path) -> str:
@@ -83,21 +70,13 @@ def _fixture_name_for_spec_path(path: Path) -> str:
     a huge hand-maintained mapping table.
     """
 
-    stem = path.stem
-    override = FIXTURE_NAME_OVERRIDES.get(stem)
-    if override is not None:
-        return override
-    normalized = re.sub(r"[^A-Za-z0-9]+", "_", stem).strip("_").lower()
-    return f"{normalized}_client"
+    return fixture_name_for_spec_path(path)
 
 
 def _request_headers_for_spec_path(path: Path) -> dict[str, str] | None:
     """Return any endpoint-family-specific request headers."""
 
-    headers = REQUEST_HEADERS_OVERRIDES.get(path.stem)
-    if headers is None:
-        return None
-    return dict(headers)
+    return request_headers_for_spec_path(path)
 
 
 # Load each endpoint spec file as its own top-level pytest parameter.
@@ -162,19 +141,7 @@ def pytest_generate_tests(metafunc: Any) -> None:
     if "endpoint_case" not in metafunc.fixturenames:
         return
 
-    parameters: list[Any] = []
-    ids: list[str] = []
-    for spec_path in _schema_paths():
-        spec = _load_spec(spec_path)
-        title = _spec_title(spec)
-        fixture_name = _fixture_name_for_spec_path(spec_path)
-        request_headers = _request_headers_for_spec_path(spec_path)
-        for case in build_operation_cases(spec):
-            parameters.append((spec_path, spec, fixture_name, request_headers, case))
-            ids.append(
-                f"{snake_case(title)}:"
-                f"{snake_case(case.operation_id)}[{case.method} {case.path}]"
-            )
+    parameters, ids = build_parametrization(SCHEMA_ROOT)
 
     metafunc.parametrize(
         (
