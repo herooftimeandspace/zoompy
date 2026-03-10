@@ -41,6 +41,25 @@ The same `request()` method supports both ordinary Zoom endpoints and
 master-account endpoints. `zoompy` loads both path-based schema families and
 selects the matching OpenAPI operation from the request path automatically.
 
+### Layered SDK interface
+
+`request()` remains the transport core, but `zoompy` now also builds a dynamic
+SDK surface from the bundled OpenAPI operations. That gives script authors a
+friendlier interface without duplicating the runtime logic:
+
+```python
+from zoompy import ZoomClient
+
+with ZoomClient() as client:
+    users = client.users.list(page_size=10)
+    me = client.users.get(user_id="me")
+    phone_user = client.phone.users.get(user_id="abc123")
+```
+
+Those SDK calls still delegate to the same validated `request()` method
+internally. In other words, the ergonomic layer is additive; it does not
+replace the low-level client.
+
 ### Token caching and Server-to-Server OAuth
 
 When you do not provide an explicit `access_token`, `zoompy` performs the Zoom
@@ -240,6 +259,35 @@ finally:
     client.close()
 ```
 
+### SDK-style access
+
+```python
+from zoompy import ZoomClient
+
+with ZoomClient() as client:
+    users = client.users.list(page_size=10)
+    user = client.users.get(user_id="me")
+    created = client.users.create(
+        body={
+            "action": "create",
+            "user_info": {
+                "email": "person@example.com",
+                "type": 1,
+                "first_name": "Ada",
+                "last_name": "Lovelace",
+            },
+        }
+    )
+```
+
+Generated SDK methods support a few conventions:
+
+- path parameters accept snake_case names like `user_id`
+- leftover keyword arguments become query parameters by default
+- request bodies may be passed as `body=` or `json=`
+- unusual operations are still available through snake-cased `operationId`
+  methods when a simple CRUD alias would be unclear
+
 ### Context manager
 
 ```python
@@ -322,6 +370,19 @@ should fail loudly rather than silently skipping validation.
 
 That split keeps transport/HTTP failures clearly separate from contract
 violations.
+
+## What zoompy does not do
+
+The library is intentionally focused. At the moment it does not:
+
+- verify Zoom webhook signatures for you
+- generate checked-in, hand-maintained per-endpoint service classes
+- download fresh schemas dynamically at runtime
+- bypass schema validation when an operation is unknown
+
+Webhook payload shape validation is supported through
+`ZoomClient.validate_webhook(...)`, but request authenticity checks still belong
+in the application that receives the webhook.
 
 ## Development
 
