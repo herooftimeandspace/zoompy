@@ -8,8 +8,7 @@ from __future__ import annotations
 
 import threading
 import time
-from datetime import datetime, timezone
-from typing import Any
+from datetime import UTC, datetime
 
 import httpx
 from pydantic import BaseModel, ConfigDict
@@ -88,7 +87,7 @@ class OAuthTokenManager:
 
             expires_at_iso = datetime.fromtimestamp(
                 self._expires_at_epoch,
-                tz=timezone.utc,
+                tz=UTC,
             ).isoformat()
             self._logger.info(
                 "Acquired Zoom access token.",

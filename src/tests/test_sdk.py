@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
+from pydantic import BaseModel, ValidationError
 
 from zoompy import ZoomClient
 from zoompy.schema import SchemaRegistry
@@ -65,7 +66,27 @@ def _build_sdk_client(tmp_path: Path) -> ZoomClient:
                             "200": {
                                 "content": {
                                     "application/json": {
-                                        "schema": {"type": "object"}
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "users": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "object",
+                                                        "properties": {
+                                                            "userId": {
+                                                                "type": "string"
+                                                            },
+                                                            "displayName": {
+                                                                "type": "string"
+                                                            },
+                                                        },
+                                                        "required": ["userId"],
+                                                    },
+                                                }
+                                            },
+                                            "required": ["users"],
+                                        }
                                     }
                                 }
                             }
@@ -77,7 +98,14 @@ def _build_sdk_client(tmp_path: Path) -> ZoomClient:
                         "requestBody": {
                             "content": {
                                 "application/json": {
-                                    "schema": {"type": "object"}
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "email": {"type": "string"},
+                                            "firstName": {"type": "string"},
+                                        },
+                                        "required": ["email"],
+                                    }
                                 }
                             }
                         },
@@ -85,7 +113,14 @@ def _build_sdk_client(tmp_path: Path) -> ZoomClient:
                             "201": {
                                 "content": {
                                     "application/json": {
-                                        "schema": {"type": "object"}
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "id": {"type": "string"},
+                                                "email": {"type": "string"},
+                                            },
+                                            "required": ["id", "email"],
+                                        }
                                     }
                                 }
                             }
@@ -108,7 +143,14 @@ def _build_sdk_client(tmp_path: Path) -> ZoomClient:
                             "200": {
                                 "content": {
                                     "application/json": {
-                                        "schema": {"type": "object"}
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "userId": {"type": "string"},
+                                                "displayName": {"type": "string"},
+                                            },
+                                            "required": ["userId"],
+                                        }
                                     }
                                 }
                             }
@@ -133,7 +175,16 @@ def _build_sdk_client(tmp_path: Path) -> ZoomClient:
                             "200": {
                                 "content": {
                                     "application/json": {
-                                        "schema": {"type": "object"}
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "userId": {"type": "string"},
+                                                "extensionNumber": {
+                                                    "type": "string"
+                                                },
+                                            },
+                                            "required": ["userId"],
+                                        }
                                     }
                                 }
                             }
@@ -162,7 +213,16 @@ def _build_sdk_client(tmp_path: Path) -> ZoomClient:
                             "200": {
                                 "content": {
                                     "application/json": {
-                                        "schema": {"type": "object"}
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "userId": {"type": "string"},
+                                                "displayName": {
+                                                    "type": "string"
+                                                },
+                                            },
+                                            "required": ["userId"],
+                                        }
                                     }
                                 }
                             }
@@ -188,6 +248,7 @@ def test_zoom_client_exposes_generated_service_namespaces(tmp_path: Path) -> Non
         assert callable(client.users.get)
         assert callable(client.users.create)
         assert callable(client.phone.users.get)
+        assert callable(client.phone.user.get)
     finally:
         client.close()
 
@@ -227,7 +288,7 @@ def test_sdk_list_alias_maps_kwargs_to_query_params(
     monkeypatch.setattr(client, "request", fake_request)
 
     try:
-        result = client.users.list(page_size=10, status="active")
+        result = client.users.list.raw(page_size=10, status="active")
     finally:
         client.close()
 
@@ -275,7 +336,7 @@ def test_sdk_get_alias_maps_snake_case_path_parameters(
     monkeypatch.setattr(client, "request", fake_request)
 
     try:
-        result = client.phone.users.get(
+        result = client.phone.users.get.raw(
             user_id="user-123",
             include_inactive=True,
         )
@@ -329,8 +390,8 @@ def test_sdk_operation_id_method_and_create_alias_forward_json_body(
     monkeypatch.setattr(client, "request", fake_request)
 
     try:
-        client.users.create(body={"email": "person@example.com"})
-        client.users.create_user(json={"email": "person@example.com"})
+        client.users.create.raw(email="person@example.com")
+        client.users.create_user.raw(json={"email": "person@example.com"})
     finally:
         client.close()
 
@@ -363,3 +424,144 @@ def test_sdk_requires_missing_path_parameters_explicitly(
             client.users.get()
     finally:
         client.close()
+
+
+def test_sdk_exposes_typed_request_and_response_models(tmp_path: Path) -> None:
+    """Still expose the generated models for advanced callers who want them."""
+
+    client = _build_sdk_client(tmp_path)
+    try:
+        request_model = client.users.create.request_model
+        response_model = client.users.get.response_model
+    finally:
+        client.close()
+
+    assert request_model is not None
+    assert response_model is not None
+    assert issubclass(request_model, BaseModel)
+    assert issubclass(response_model, BaseModel)
+
+
+def test_sdk_calls_return_model_instances_with_pythonic_fields_by_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Return typed models by default instead of requiring `.typed(...)`."""
+
+    client = _build_sdk_client(tmp_path)
+
+    def fake_request(
+        method: str,
+        path: str,
+        *,
+        path_params: Any = None,
+        params: Any = None,
+        json: Any = None,
+        headers: Any = None,
+        timeout: Any = None,
+    ) -> dict[str, Any]:
+        return {
+            "userId": path_params["userId"],
+            "displayName": "Ada Lovelace",
+        }
+
+    monkeypatch.setattr(client, "request", fake_request)
+
+    try:
+        result = client.users.get(user_id="me")
+    finally:
+        client.close()
+
+    assert isinstance(result, BaseModel)
+    typed_result = cast(Any, result)
+    assert typed_result.user_id == "me"
+    assert typed_result.display_name == "Ada Lovelace"
+
+
+def test_sdk_validates_request_bodies_before_sending_by_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Treat leftover kwargs as request-body fields for body operations."""
+
+    client = _build_sdk_client(tmp_path)
+    recorded: dict[str, Any] = {}
+
+    def fake_request(
+        method: str,
+        path: str,
+        *,
+        path_params: Any = None,
+        params: Any = None,
+        json: Any = None,
+        headers: Any = None,
+        timeout: Any = None,
+    ) -> dict[str, Any]:
+        recorded["json"] = json
+        return {"id": "abc123", "email": json["email"]}
+
+    monkeypatch.setattr(client, "request", fake_request)
+
+    try:
+        response = client.users.create(
+            email="person@example.com",
+            first_name="Ada",
+        )
+    finally:
+        client.close()
+
+    assert recorded["json"] == {
+        "email": "person@example.com",
+        "firstName": "Ada",
+    }
+    assert isinstance(response, BaseModel)
+    typed_response = cast(Any, response)
+    assert typed_response.email == "person@example.com"
+
+
+def test_sdk_rejects_invalid_request_bodies_by_default(
+    tmp_path: Path,
+) -> None:
+    """Raise a validation error before dispatching an invalid body payload."""
+
+    client = _build_sdk_client(tmp_path)
+    try:
+        with pytest.raises(ValidationError, match="email"):
+            client.users.create(first_name="Ada")
+    finally:
+        client.close()
+
+
+def test_sdk_supports_singular_namespace_and_generic_id_alias(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Allow `phone.user.get(id=...)` as a friendlier scripting shorthand."""
+
+    client = _build_sdk_client(tmp_path)
+    recorded: dict[str, Any] = {}
+
+    def fake_request(
+        method: str,
+        path: str,
+        *,
+        path_params: Any = None,
+        params: Any = None,
+        json: Any = None,
+        headers: Any = None,
+        timeout: Any = None,
+    ) -> dict[str, Any]:
+        recorded["path_params"] = path_params
+        return {"userId": path_params["userId"]}
+
+    monkeypatch.setattr(client, "request", fake_request)
+
+    try:
+        result = client.phone.user.get(id="1234")
+    finally:
+        client.close()
+
+    assert isinstance(result, BaseModel)
+    typed_result = cast(Any, result)
+    assert typed_result.user_id == "1234"
+    assert recorded["path_params"] == {"userId": "1234"}

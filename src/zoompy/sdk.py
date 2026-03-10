@@ -19,10 +19,15 @@ single source of truth.
 
 from __future__ import annotations
 
+import json
 import keyword
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Mapping
+from types import GenericAlias
+from typing import TYPE_CHECKING, Any, Literal, cast
+
+from pydantic import BaseModel, ConfigDict, Field, RootModel, create_model
 
 from .schema import OpenApiSchemaTools, SchemaOperation, SchemaRegistry
 
@@ -68,6 +73,266 @@ class SdkOperation:
     summary: str | None
     description: str | None
     operation_id: str
+    request_schema: Mapping[str, Any] | None
+    response_schema: Mapping[str, Any] | None
+
+
+@dataclass(frozen=True)
+class SdkModels:
+    """Typed request and response models for one SDK operation."""
+
+    request_model: type[BaseModel] | None
+    response_model: type[BaseModel] | None
+
+
+class ModelFactory:
+    """Build dynamic Pydantic models from prepared OpenAPI schemas.
+
+    The goal here is not to perfectly reproduce every nuance of the OpenAPI
+    corpus as static Python code. Instead, we generate practical runtime models
+    that are good enough for interactive scripting and strongly typed helper
+    methods, while still leaning on the existing JSON Schema validator as the
+    final contract authority.
+    """
+
+    def __init__(self, tools: OpenApiSchemaTools | None = None) -> None:
+        """Create one reusable model factory with a small in-memory cache."""
+
+        self._tools = tools or OpenApiSchemaTools()
+        self._cache: dict[tuple[str, str], type[BaseModel]] = {}
+
+    def models_for_operation(self, operation: SdkOperation) -> SdkModels:
+        """Build typed request and response models for one SDK operation."""
+
+        request_model = None
+        response_model = None
+
+        if isinstance(operation.request_schema, Mapping):
+            request_model = self.model_from_schema(
+                name=f"{_pascal_case(operation.operation_name)}Request",
+                schema=operation.request_schema,
+            )
+
+        if isinstance(operation.response_schema, Mapping):
+            response_model = self.model_from_schema(
+                name=f"{_pascal_case(operation.operation_name)}Response",
+                schema=operation.response_schema,
+            )
+
+        return SdkModels(
+            request_model=request_model,
+            response_model=response_model,
+        )
+
+    def model_from_schema(
+        self,
+        *,
+        name: str,
+        schema: Mapping[str, Any],
+    ) -> type[BaseModel]:
+        """Create one Pydantic model class from a prepared schema fragment."""
+
+        normalized = self._tools.normalize_schema(schema)
+        cache_key = (name, json.dumps(normalized, sort_keys=True, default=str))
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        annotation = self._annotation_for_schema(
+            name=name,
+            schema=normalized,
+        )
+        model = self._wrap_annotation_as_model(name=name, annotation=annotation)
+        self._cache[cache_key] = model
+        return model
+
+    def _annotation_for_schema(
+        self,
+        *,
+        name: str,
+        schema: Mapping[str, Any],
+    ) -> Any:
+        """Translate a prepared schema fragment into a Python type annotation."""
+
+        if "enum" in schema and isinstance(schema["enum"], list):
+            enum_values = tuple(value for value in schema["enum"])
+            if enum_values:
+                return Literal.__getitem__(enum_values)
+
+        if "allOf" in schema and isinstance(schema["allOf"], list):
+            merged = self._merge_all_of(schema)
+            return self._annotation_for_schema(name=name, schema=merged)
+
+        for keyword_name in ("oneOf", "anyOf"):
+            if keyword_name in schema and isinstance(schema[keyword_name], list):
+                variants = [
+                    self._annotation_for_schema(
+                        name=f"{name}{index + 1}",
+                        schema=variant,
+                    )
+                    for index, variant in enumerate(schema[keyword_name])
+                    if isinstance(variant, Mapping)
+                ]
+                if variants:
+                    if len(variants) == 1:
+                        return variants[0]
+                    return self._union_type(variants)
+
+        schema_type = schema.get("type")
+        if schema_type == "object" or "properties" in schema:
+            return self._model_for_object_schema(name=name, schema=schema)
+        if schema_type == "array":
+            item_schema = schema.get("items")
+            if isinstance(item_schema, Mapping):
+                item_annotation = self._annotation_for_schema(
+                    name=f"{name}Item",
+                    schema=item_schema,
+                )
+                return GenericAlias(list, item_annotation)
+            return list[Any]
+        if schema_type == "string":
+            return str
+        if schema_type == "integer":
+            return int
+        if schema_type == "number":
+            return float
+        if schema_type == "boolean":
+            return bool
+
+        additional = schema.get("additionalProperties")
+        if isinstance(additional, Mapping):
+            value_annotation = self._annotation_for_schema(
+                name=f"{name}Value",
+                schema=additional,
+            )
+            return GenericAlias(dict, (str, value_annotation))
+
+        return Any
+
+    def _model_for_object_schema(
+        self,
+        *,
+        name: str,
+        schema: Mapping[str, Any],
+    ) -> type[BaseModel]:
+        """Create one `BaseModel` subclass for an object schema."""
+
+        normalized = self._tools.normalize_schema(schema)
+        cache_key = (name, json.dumps(normalized, sort_keys=True, default=str))
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        properties = normalized.get("properties")
+        required = normalized.get("required", [])
+        required_names = {item for item in required if isinstance(item, str)}
+        fields: dict[str, tuple[Any, Any]] = {}
+
+        if isinstance(properties, Mapping):
+            for original_name, property_schema in properties.items():
+                if not isinstance(original_name, str):
+                    continue
+
+                prepared_property_schema = (
+                    property_schema
+                    if isinstance(property_schema, Mapping)
+                    else {}
+                )
+                field_name = _identifier(original_name)
+                field_annotation = self._annotation_for_schema(
+                    name=f"{name}{_pascal_case(field_name)}",
+                    schema=prepared_property_schema,
+                )
+
+                if original_name in required_names:
+                    default = Field(..., alias=original_name)
+                else:
+                    field_annotation = field_annotation | None
+                    default = Field(None, alias=original_name)
+
+                fields[field_name] = (field_annotation, default)
+
+        additional = normalized.get("additionalProperties")
+        config = ConfigDict(populate_by_name=True, extra="allow")
+        if additional is False:
+            config = ConfigDict(populate_by_name=True, extra="forbid")
+
+        model = cast(
+            type[BaseModel],
+            cast(Any, create_model)(
+                name,
+                __config__=config,
+                **fields,
+            ),
+        )
+        self._cache[cache_key] = model
+        return model
+
+    def _merge_all_of(self, schema: Mapping[str, Any]) -> dict[str, Any]:
+        """Merge object-style `allOf` branches into one composite schema."""
+
+        merged: dict[str, Any] = {}
+        for key, value in schema.items():
+            if key == "allOf":
+                continue
+            merged[key] = value
+
+        for branch in schema.get("allOf", []):
+            if not isinstance(branch, Mapping):
+                continue
+            for key, value in branch.items():
+                if key == "properties":
+                    existing = merged.get("properties")
+                    if isinstance(existing, Mapping) and isinstance(value, Mapping):
+                        merged[key] = {**existing, **value}
+                    else:
+                        merged[key] = value
+                elif key == "required":
+                    existing_required = merged.get("required", [])
+                    if isinstance(existing_required, list) and isinstance(value, list):
+                        merged[key] = list(
+                            dict.fromkeys([*existing_required, *value])
+                        )
+                    else:
+                        merged[key] = value
+                else:
+                    merged[key] = value
+        return merged
+
+    def _union_type(self, variants: list[Any]) -> Any:
+        """Build a PEP 604 union from an arbitrary list of annotations."""
+
+        combined = variants[0]
+        for variant in variants[1:]:
+            combined = combined | variant
+        return combined
+
+    def _wrap_annotation_as_model(
+        self,
+        *,
+        name: str,
+        annotation: Any,
+    ) -> type[BaseModel]:
+        """Wrap a root annotation in a Pydantic model when needed.
+
+        Object schemas already become `BaseModel` subclasses directly. Other
+        shapes such as arrays or scalar roots are wrapped in `RootModel`
+        subclasses so callers still get a consistent model object back from the
+        typed SDK path.
+        """
+
+        if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+            return annotation
+
+        model = cast(
+            type[BaseModel],
+            type(
+                name,
+                (RootModel[annotation],),
+                {"model_config": ConfigDict(populate_by_name=True)},
+            ),
+        )
+        return model
 
 
 class SdkMethod:
@@ -84,16 +349,34 @@ class SdkMethod:
 
         self._client = client
         self._operation = operation
+        self._model_factory = ModelFactory()
+        self._models: SdkModels | None = None
         self.__doc__ = self._build_docstring()
 
-    def __call__(self, **kwargs: Any) -> dict[str, Any] | list[Any] | None:
-        """Translate Python kwargs into one `ZoomClient.request()` call.
+    def __call__(self, **kwargs: Any) -> BaseModel | dict[str, Any] | list[Any] | None:
+        """Execute the SDK method using scripting-friendly defaults.
+
+        Normal SDK calls return typed model objects automatically when a
+        representative response model exists. Callers that explicitly prefer raw
+        validated JSON can use `.raw(...)`.
+        """
+
+        result = self.raw(**kwargs)
+        response_model = self.response_model
+        if result is None or response_model is None:
+            return result
+        return response_model.model_validate(result)
+
+    def raw(self, **kwargs: Any) -> dict[str, Any] | list[Any] | None:
+        """Execute the SDK method and return raw validated JSON.
 
         Supported conventions:
 
         * required path parameters may be passed in snake_case or original form
-        * leftover keyword arguments become query parameters by default
-        * request bodies may be passed as `body=` or `json=`
+        * a generic `id=` alias works when exactly one path parameter exists
+        * known query parameters stay query parameters
+        * leftover keyword arguments become JSON body fields for body-capable
+          operations
         * advanced callers can still pass explicit `path_params=`, `params=`,
           `headers=`, and `timeout=`
         """
@@ -116,10 +399,23 @@ class SdkMethod:
         else:
             path_params = dict(explicit_path_params)
 
-        if explicit_params is None:
-            params = dict(remaining) if remaining else None
-            remaining.clear()
+        params: dict[str, Any] | None = None
+
+        json_payload: Any | None = None
+        if explicit_json is not _MISSING:
+            json_payload = explicit_json
+        elif explicit_body is not _MISSING:
+            json_payload = explicit_body
         else:
+            if explicit_params is None and self._operation.has_json_body:
+                params, json_payload = self._split_query_and_body_kwargs(remaining)
+            elif explicit_params is None:
+                params = dict(remaining) if remaining else None
+                remaining.clear()
+            else:
+                params = dict(explicit_params)
+
+        if explicit_params is not None:
             params = dict(explicit_params)
 
         if remaining:
@@ -129,11 +425,16 @@ class SdkMethod:
                 f"{self._operation.operation_name}: {unknown_names}"
             )
 
-        json_payload: Any | None = None
-        if explicit_json is not _MISSING:
-            json_payload = explicit_json
-        elif explicit_body is not _MISSING:
-            json_payload = explicit_body
+        if isinstance(json_payload, BaseModel):
+            json_payload = json_payload.model_dump(
+                by_alias=True,
+                exclude_none=True,
+            )
+        elif json_payload is not None and self.request_model is not None:
+            json_payload = self._normalize_typed_body(
+                request_model=self.request_model,
+                value=json_payload,
+            )
 
         return self._client.request(
             self._operation.http_method,
@@ -144,6 +445,62 @@ class SdkMethod:
             headers=headers,
             timeout=timeout,
         )
+
+    @property
+    def request_model(self) -> type[BaseModel] | None:
+        """Return the generated request-body model for this SDK method.
+
+        Many Zoom operations do not accept JSON bodies, so this property is
+        optional by design.
+        """
+
+        return self._get_models().request_model
+
+    @property
+    def response_model(self) -> type[BaseModel] | None:
+        """Return the generated typed response model for this SDK method."""
+
+        return self._get_models().response_model
+
+    def typed(self, **kwargs: Any) -> BaseModel | dict[str, Any] | list[Any] | None:
+        """Backward-compatible alias for the default typed SDK behavior."""
+
+        return self(**kwargs)
+
+    def _normalize_typed_body(
+        self,
+        *,
+        request_model: type[BaseModel],
+        value: Any,
+    ) -> dict[str, Any] | list[Any] | Any:
+        """Validate and serialize one typed request body.
+
+        Accepting either a raw `dict` or a model instance keeps the typed path
+        ergonomic in scripts while still ensuring that the body shape matches
+        the generated request model before it leaves the process.
+        """
+
+        if isinstance(value, BaseModel):
+            validated = value
+        else:
+            validated = request_model.model_validate(value)
+
+        dumped = validated.model_dump(
+            by_alias=True,
+            exclude_none=True,
+        )
+        if isinstance(validated, RootModel):
+            return dumped["root"]
+        return dumped
+
+    def _get_models(self) -> SdkModels:
+        """Build and cache typed request/response models on first use."""
+
+        if self._models is None:
+            self._models = self._model_factory.models_for_operation(
+                self._operation
+            )
+        return self._models
 
     def _consume_path_parameters(
         self,
@@ -157,7 +514,17 @@ class SdkMethod:
         """
 
         collected: dict[str, Any] = {}
+        if (
+            len(self._operation.path_parameters) == 1 and
+            "id" in remaining
+        ):
+            only_parameter = self._operation.path_parameters[0]
+            if only_parameter.python_name not in remaining and only_parameter.original_name not in remaining:
+                collected[only_parameter.original_name] = remaining.pop("id")
+
         for parameter in self._operation.path_parameters:
+            if parameter.original_name in collected:
+                continue
             if parameter.python_name in remaining:
                 collected[parameter.original_name] = remaining.pop(
                     parameter.python_name
@@ -178,6 +545,36 @@ class SdkMethod:
                 )
 
         return collected or None
+
+    def _split_query_and_body_kwargs(
+        self,
+        remaining: dict[str, Any],
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | list[Any] | Any | None]:
+        """Split leftover kwargs into query params and JSON body data."""
+
+        query_name_map = {
+            parameter.python_name: parameter.original_name
+            for parameter in self._operation.query_parameters
+        }
+        params: dict[str, Any] = {}
+        body: dict[str, Any] = {}
+
+        for key in list(remaining):
+            value = remaining.pop(key)
+            if key in query_name_map:
+                params[query_name_map[key]] = value
+            else:
+                body[key] = value
+
+        if body and self.request_model is not None:
+            normalized_body = self._normalize_typed_body(
+                request_model=self.request_model,
+                value=body,
+            )
+        else:
+            normalized_body = body or None
+
+        return params or None, normalized_body
 
     def _build_docstring(self) -> str:
         """Assemble a human-readable docstring for interactive users.
@@ -219,7 +616,18 @@ class SdkMethod:
                 [
                     "",
                     "Request body:",
-                    "- pass the JSON payload as `body=` or `json=`",
+                    "- leftover kwargs become JSON body fields by default",
+                    "- or pass the payload explicitly as `body=` or `json=`",
+                ]
+            )
+
+        if self._operation.response_schema is not None:
+            lines.extend(
+                [
+                    "",
+                    "Return shape:",
+                    "- normal calls return a typed Pydantic model when possible",
+                    "- use `.raw(...)` for plain JSON",
                 ]
             )
 
@@ -240,6 +648,7 @@ class ServiceNode:
         self._name = name
         self._client = client
         self._children: dict[str, ServiceNode] = {}
+        self._child_aliases: dict[str, ServiceNode] = {}
         self._methods: dict[str, SdkMethod] = {}
 
     def add_child(self, name: str) -> ServiceNode:
@@ -259,13 +668,19 @@ class ServiceNode:
     def has_member(self, name: str) -> bool:
         """Return whether this namespace exposes a child or a method."""
 
-        return name in self._children or name in self._methods
+        return (
+            name in self._children or
+            name in self._child_aliases or
+            name in self._methods
+        )
 
     def get_member(self, name: str) -> Any:
         """Return one child namespace or method by attribute name."""
 
         if name in self._children:
             return self._children[name]
+        if name in self._child_aliases:
+            return self._child_aliases[name]
         if name in self._methods:
             return self._methods[name]
         raise AttributeError(f"{self!r} has no member {name!r}")
@@ -283,6 +698,7 @@ class ServiceNode:
                 [
                     *super().__dir__(),
                     *self._children.keys(),
+                    *self._child_aliases.keys(),
                     *self._methods.keys(),
                 ]
             )
@@ -376,6 +792,8 @@ class ZoomSdk:
                 SdkMethod(client=self._client, operation=operation),
             )
 
+        self._build_singular_aliases(self._root)
+
     def _ensure_namespace(self, namespace: tuple[str, ...]) -> ServiceNode:
         """Create or reuse the nested namespace path for one operation."""
 
@@ -404,7 +822,19 @@ class ZoomSdk:
             summary=operation.summary,
             description=operation.description,
             operation_id=operation.operation_id,
+            request_schema=self._registry.request_body_schema(operation),
+            response_schema=self._registry.response_schema(operation),
         )
+
+    def _build_singular_aliases(self, node: ServiceNode) -> None:
+        """Add simple singular aliases like `user` for `users` namespaces."""
+
+        for name, child in list(node._children.items()):
+            if name.endswith("s") and len(name) > 1:
+                singular = name[:-1]
+                if singular and not node.has_member(singular):
+                    node._child_aliases[singular] = child
+            self._build_singular_aliases(child)
 
 
 def _extract_parameters(
@@ -502,3 +932,10 @@ def _identifier(value: str) -> str:
     if keyword.iskeyword(value):
         value = f"{value}_"
     return value
+
+
+def _pascal_case(value: str) -> str:
+    """Convert a snake-cased identifier into PascalCase for model names."""
+
+    cleaned = _identifier(value)
+    return "".join(part.capitalize() for part in cleaned.split("_")) or "Model"

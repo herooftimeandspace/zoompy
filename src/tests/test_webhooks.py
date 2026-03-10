@@ -33,7 +33,6 @@ from _openapi_contract import (
     validate_webhook_examples,
 )
 
-
 WEBHOOK_ROOT = Path(__file__).resolve().parent / "webhooks"
 
 

@@ -21,12 +21,13 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any
 
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,7 @@ class SchemaOperation:
     description: str | None
     parameters: tuple[Any, ...]
     has_request_body: bool
+    request_body: Mapping[str, Any] | None
     responses: Mapping[str, Any]
     spec: Mapping[str, Any]
     server_url: str | None
@@ -621,6 +623,11 @@ class PathOperationIndex:
                                 operation.get("requestBody"),
                                 Mapping,
                             ),
+                            request_body=(
+                                operation.get("requestBody")
+                                if isinstance(operation.get("requestBody"), Mapping)
+                                else None
+                            ),
                             responses=operation.get("responses", {}),
                             spec=spec,
                             server_url=server_url,
@@ -987,4 +994,51 @@ class SchemaRegistry:
                 return schema
             return None
 
+        return None
+
+    def request_body_schema(
+        self,
+        operation: SchemaOperation,
+    ) -> Mapping[str, Any] | None:
+        """Return the JSON request-body schema for one operation, if any.
+
+        The SDK layer uses this to build optional typed request models without
+        duplicating the media-selection logic used elsewhere in the runtime.
+        """
+
+        request_body = operation.request_body
+        if not isinstance(request_body, Mapping):
+            return None
+
+        content = request_body.get("content")
+        if not isinstance(content, Mapping):
+            return None
+
+        media = self._tools.pick_json_media(content)
+        if media is None:
+            return None
+
+        schema = media.get("schema")
+        if isinstance(schema, Mapping):
+            return schema
+        return None
+
+    def response_schema(
+        self,
+        operation: SchemaOperation,
+        *,
+        preferred_status_codes: tuple[int, ...] = (200, 201, 202),
+    ) -> Mapping[str, Any] | None:
+        """Return a representative success-response schema for one operation.
+
+        The low-level client validates against the actual status code it
+        receives. The SDK layer needs a stable schema to build an optional typed
+        response model ahead of time, so it asks for the first useful success
+        schema from a small preferred status list.
+        """
+
+        for status_code in preferred_status_codes:
+            schema = self._pick_response_schema(operation, status_code)
+            if schema is not None:
+                return schema
         return None

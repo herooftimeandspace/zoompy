@@ -18,8 +18,8 @@ contract logic diverge.
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -32,7 +32,6 @@ from _openapi_contract import (
     snake_case,
     validate_response_examples,
 )
-
 
 MASTER_ACCOUNT_ROOT = Path(__file__).resolve().parent / "master_accounts"
 

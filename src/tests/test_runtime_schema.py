@@ -21,7 +21,7 @@ from typing import Any
 
 import pytest
 
-from zoompy import ZoomClient, WebhookRegistry
+from zoompy import WebhookRegistry, ZoomClient
 from zoompy.schema import SchemaRegistry
 
 

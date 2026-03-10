@@ -8,11 +8,13 @@ Keeping the fixture layer thin is deliberate: the goal is to validate the real
 library behavior, not a parallel testing adapter with its own custom logic.
 """
 
+# ruff: noqa: E402, I001
+
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Any
 
 import pytest

@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import random
 import time
+from collections.abc import Mapping
 from email.utils import parsedate_to_datetime
-from typing import Any, Mapping
+from typing import Any, cast
 from urllib.parse import quote
 
 import httpx
@@ -19,9 +20,8 @@ import httpx
 from .auth import OAuthTokenManager
 from .config import ZoomSettings
 from .logging import get_logger
-from .sdk import ZoomSdk
 from .schema import SchemaRegistry, WebhookRegistry
-
+from .sdk import ZoomSdk
 
 RETRIABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 RETRIABLE_EXCEPTIONS = (
@@ -121,7 +121,7 @@ class ZoomClient:
             access_token=access_token,
         )
 
-    def __enter__(self) -> "ZoomClient":
+    def __enter__(self) -> ZoomClient:
         """Support context-manager usage with `with ZoomClient() as client:`."""
 
         return self
@@ -148,9 +148,13 @@ class ZoomClient:
         """Include generated SDK namespaces in interactive discovery."""
 
         names = set(super().__dir__())
-        sdk = getattr(self, "_sdk", None)
-        if sdk is not None:
-            names.update(dir(sdk))
+        try:
+            names.update(dir(self.sdk))
+        except Exception:
+            # `dir()` should stay safe even if schema loading fails for some
+            # reason. Falling back to the normal attribute list keeps
+            # introspection usable instead of surprising callers with errors.
+            pass
         return sorted(names)
 
     def close(self) -> None:
@@ -473,7 +477,7 @@ class ZoomClient:
             )
             raise
 
-        return payload
+        return cast(dict[str, Any] | list[Any] | None, payload)
 
     def _should_retry_response(self, response: httpx.Response) -> bool:
         """Return true for HTTP responses that are safe to retry automatically."""
@@ -501,7 +505,7 @@ class ZoomClient:
             self._backoff_max_seconds,
             self._backoff_base_seconds * (2 ** attempt),
         )
-        return sleep_seconds * random.uniform(0.75, 1.25)
+        return float(sleep_seconds * random.uniform(0.75, 1.25))
 
     def _parse_retry_after(self, value: str | None) -> float | None:
         """Parse either integer or HTTP-date `Retry-After` header values."""

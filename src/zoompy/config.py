@@ -101,7 +101,7 @@ class ZoomSettings(BaseModel):
     token_skew_seconds: int = Field(default=60)
 
     @classmethod
-    def from_environment(cls, *, load_local_env: bool = True) -> "ZoomSettings":
+    def from_environment(cls, *, load_local_env: bool = True) -> ZoomSettings:
         """Build settings from process environment variables.
 
         Parameters
@@ -124,7 +124,7 @@ class ZoomSettings(BaseModel):
             token_skew_seconds=int(os.getenv("ZOOM_TOKEN_SKEW_SECONDS", "60")),
         )
 
-    def merged_with(self, **overrides: Any) -> "ZoomSettings":
+    def merged_with(self, **overrides: Any) -> ZoomSettings:
         """Return a new settings object with explicit overrides applied.
 
         This lets the client constructor accept keyword arguments while keeping

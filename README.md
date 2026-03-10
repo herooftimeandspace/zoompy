@@ -267,26 +267,51 @@ from zoompy import ZoomClient
 with ZoomClient() as client:
     users = client.users.list(page_size=10)
     user = client.users.get(user_id="me")
-    created = client.users.create(
-        body={
-            "action": "create",
-            "user_info": {
-                "email": "person@example.com",
-                "type": 1,
-                "first_name": "Ada",
-                "last_name": "Lovelace",
-            },
-        }
-    )
+    phone_user = client.phone.user.get(id="1234")
 ```
 
 Generated SDK methods support a few conventions:
 
 - path parameters accept snake_case names like `user_id`
-- leftover keyword arguments become query parameters by default
-- request bodies may be passed as `body=` or `json=`
+- a generic `id=` alias works when a method has exactly one path parameter
+- known query parameters remain query parameters
+- leftover keyword arguments become JSON body fields for body-capable methods
 - unusual operations are still available through snake-cased `operationId`
   methods when a simple CRUD alias would be unclear
+- `.raw(...)` is available when you explicitly want plain JSON instead of typed
+  objects
+
+### Typed SDK access
+
+The SDK layer now returns typed Pydantic model objects by default whenever a
+representative success-response schema is available. In other words, normal SDK
+calls already behave like a real typed scripting SDK:
+
+Example:
+
+```python
+from zoompy import ZoomClient
+
+with ZoomClient() as client:
+    user = client.users.get(user_id="me")
+    print(user.display_name)
+
+    created = client.users.create(
+        email="person@example.com",
+        first_name="Ada",
+    )
+    print(created.email)
+```
+
+The older low-level model hooks still exist for advanced use:
+
+- `request_model`
+- `response_model`
+- `.typed(...)`
+
+They are no longer the primary interface. They mainly exist as escape hatches
+for advanced callers and internal testing. If you want plain validated JSON
+instead of model objects, use `.raw(...)`.
 
 ### Context manager
 

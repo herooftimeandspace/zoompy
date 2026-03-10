@@ -24,7 +24,6 @@ import pytest
 from zoompy import ZoomClient
 from zoompy.config import load_dotenv
 
-
 REQUIRED_ENV_VARS = (
     "ZOOM_ACCOUNT_ID",
     "ZOOM_CLIENT_ID",
@@ -158,7 +157,7 @@ def test_integration_smoke_read_only_endpoints() -> None:
 
     client = ZoomClient()
     try:
-        token = _get_access_token_or_skip(client)
+        _get_access_token_or_skip(client)
 
         # Read a bounded page of users so the smoke test stays fast and
         # non-destructive even on large accounts.
@@ -209,14 +208,14 @@ def test_integration_smoke_read_only_endpoints() -> None:
         assert generic_user_id
         assert phone_user_id
 
-        user_detail = _request_or_skip_for_scope(
+        _request_or_skip_for_scope(
             client,
             "GET",
             "/users/{userId}",
             path_params={"userId": generic_user_id},
         )
 
-        phone_user_detail = _request_or_skip_for_scope(
+        _request_or_skip_for_scope(
             client,
             "GET",
             "/phone/users/{userId}",
@@ -242,7 +241,7 @@ def test_integration_smoke_read_only_endpoints() -> None:
         phone_device_id = _first_identifier(phone_devices[0], "id", "device_id")
         assert phone_device_id
 
-        phone_device_detail = _request_or_skip_for_scope(
+        _request_or_skip_for_scope(
             client,
             "GET",
             "/phone/devices/{deviceId}",

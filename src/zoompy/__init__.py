@@ -8,7 +8,7 @@ instances directly, so it does not need a large import surface here.
 
 from .client import ZoomClient
 from .logging import configure_logging
-from .sdk import ZoomSdk
 from .schema import WebhookRegistry
+from .sdk import ZoomSdk
 
 __all__ = ["ZoomClient", "ZoomSdk", "WebhookRegistry", "configure_logging"]
