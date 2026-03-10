@@ -12,13 +12,19 @@ want failures here to read like a contract diff rather than a mystery.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
 from pydantic import BaseModel
 
 from zoompy import ZoomClient, __version__
+
+_GOLDEN_PUBLIC_SURFACE_PATH = (
+    Path(__file__).parent / "golden" / "sdk_public_surface.json"
+)
 
 _TOP_LEVEL_NAMESPACE_CHECKS = (
     "users.list",
@@ -232,6 +238,50 @@ def _collect_parameter_names(
     return names
 
 
+def _collect_public_sdk_inventory(client: ZoomClient) -> dict[str, dict[str, Any]]:
+    """Collect every generated SDK method from the internal service tree.
+
+    `ServiceNode` also exposes helper methods such as `add_child` and
+    `get_member`, which are part of the implementation rather than the public
+    generated API surface. Walking the internal `_children` and `_methods`
+    maps lets this test pin only the real schema-derived endpoint methods.
+    """
+
+    _ = client.sdk
+    root = client._sdk._root
+
+    def walk(node: Any, prefix: tuple[str, ...] = ()) -> dict[str, dict[str, Any]]:
+        inventory: dict[str, dict[str, Any]] = {}
+        for name, method in sorted(node._methods.items()):
+            path = ".".join(prefix + (name,))
+            inventory[path] = {
+                "operation_id": method._operation.operation_id,
+                "http_method": method._operation.http_method,
+                "path": method._operation.path,
+                "path_parameters": [
+                    parameter.python_name
+                    for parameter in method._operation.path_parameters
+                ],
+                "query_parameters": [
+                    parameter.python_name
+                    for parameter in method._operation.query_parameters
+                ],
+                "has_request_model": method.request_model is not None,
+                "has_response_model": method.response_model is not None,
+            }
+        for name, child in sorted(node._children.items()):
+            inventory.update(walk(child, prefix + (name,)))
+        return inventory
+
+    return walk(root)
+
+
+def _load_golden_public_surface() -> dict[str, dict[str, Any]]:
+    """Load the checked-in full SDK inventory used as the golden contract."""
+
+    return json.loads(_GOLDEN_PUBLIC_SURFACE_PATH.read_text(encoding="utf-8"))
+
+
 def test_real_schema_sdk_exposes_expected_top_level_namespaces(
     client: ZoomClient,
 ) -> None:
@@ -286,6 +336,20 @@ def test_real_schema_sdk_operation_ids_stay_stable(client: ZoomClient) -> None:
     )
 
     assert operation_ids == _STABLE_OPERATION_IDS
+
+
+def test_real_schema_sdk_full_public_surface_matches_golden_inventory(
+    client: ZoomClient,
+) -> None:
+    """Pin every generated SDK method against a checked-in golden manifest.
+
+    The curated assertions in this file keep important families human-readable.
+    This exhaustive inventory does the opposite job: it makes sure *any*
+    refactor that changes the generated public SDK surface has to update a
+    reviewable artifact on purpose.
+    """
+
+    assert _collect_public_sdk_inventory(client) == _load_golden_public_surface()
 
 
 def test_real_schema_sdk_prefers_clean_aliases_for_noisy_families(
