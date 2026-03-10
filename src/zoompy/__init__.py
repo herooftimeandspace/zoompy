@@ -7,5 +7,6 @@ top-level namespace compact makes the library easier to discover for new users.
 
 from .client import ZoomClient
 from .logging import configure_logging
+from .schema import WebhookRegistry
 
-__all__ = ["ZoomClient", "configure_logging"]
+__all__ = ["ZoomClient", "WebhookRegistry", "configure_logging"]

@@ -19,7 +19,7 @@ import httpx
 from .auth import OAuthTokenManager
 from .config import ZoomSettings
 from .logging import get_logger
-from .schema import SchemaRegistry
+from .schema import SchemaRegistry, WebhookRegistry
 
 
 RETRIABLE_STATUS_CODES = {429, 500, 502, 503, 504}
@@ -64,6 +64,8 @@ class ZoomClient:
         timeout: float = 30.0,
         load_dotenv: bool = True,
         http_client: httpx.Client | None = None,
+        schema_registry: SchemaRegistry | None = None,
+        webhook_registry: WebhookRegistry | None = None,
     ) -> None:
         """Initialize the client and all supporting components.
 
@@ -76,6 +78,14 @@ class ZoomClient:
         http_client:
             Optional dependency injection point for advanced users or tests. When
             omitted, the client creates and owns its own `httpx.Client`.
+        schema_registry:
+            Optional override for the path-based schema registry. Advanced users
+            and focused tests can supply a custom registry instance, but the
+            default bundled endpoint and master-account documents are usually
+            what you want.
+        webhook_registry:
+            Optional override for the runtime webhook validator. When omitted,
+            the client loads the bundled webhook documents automatically.
         """
 
         settings = ZoomSettings.from_environment(
@@ -95,7 +105,8 @@ class ZoomClient:
         self._backoff_base_seconds = backoff_base_seconds
         self._backoff_max_seconds = backoff_max_seconds
         self._logger = get_logger()
-        self._schemas = SchemaRegistry()
+        self._schemas = schema_registry or SchemaRegistry()
+        self._webhooks = webhook_registry or WebhookRegistry()
         self._http = http_client or httpx.Client()
         self._owns_http_client = http_client is None
         self._token_manager = OAuthTokenManager(
@@ -129,6 +140,54 @@ class ZoomClient:
 
         return self._token_manager.get_access_token(timeout=timeout)
 
+    def validate_webhook(
+        self,
+        event_name: str,
+        payload: Any,
+        *,
+        schema_name: str | None = None,
+        operation_id: str | None = None,
+    ) -> None:
+        """Validate one incoming Zoom webhook payload.
+
+        This is the runtime counterpart to the repository's schema-driven
+        webhook tests. Callers can use it inside their webhook endpoint handler
+        to confirm that the incoming JSON still matches Zoom's published
+        contract for that event.
+
+        Parameters
+        ----------
+        event_name:
+            The webhook event type, for example `meeting.started`.
+        payload:
+            The parsed JSON body received from Zoom.
+        schema_name:
+            Optional product-family hint used when the same event name could
+            plausibly exist in more than one schema file.
+        operation_id:
+            Optional exact OpenAPI operation id for callers that want the most
+            specific possible lookup.
+        """
+
+        try:
+            self._webhooks.validate_webhook(
+                event_name=event_name,
+                payload=payload,
+                schema_name=schema_name,
+                operation_id=operation_id,
+            )
+        except ValueError as exc:
+            self._logger.error(
+                "Webhook schema validation failed.",
+                extra={
+                    "event": "webhook_schema_validation_failed",
+                    "path": event_name,
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
+            raise
+
     def request(
         self,
         method: str,
@@ -145,6 +204,11 @@ class ZoomClient:
         The method intentionally returns plain Python data structures (`dict`,
         `list`, or `None`) because that matches the contract-test suite and
         keeps the library ergonomic for callers who simply want validated JSON.
+
+        The same request method transparently supports both ordinary Zoom
+        endpoints and master-account endpoints. The runtime schema registry
+        loads both document families and chooses the matching OpenAPI operation
+        automatically from the request path.
         """
 
         raw_path = path if path.startswith("/") else f"/{path}"

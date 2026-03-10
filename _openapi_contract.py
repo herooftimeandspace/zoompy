@@ -31,6 +31,7 @@ contract without rewriting the endpoint suites themselves.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -881,6 +882,18 @@ def build_operation_cases(spec: Mapping[str, Any]) -> list[OperationCase]:
                 path_params[name] = value
             elif parameter.get("required") is True:
                 query_params[name] = value
+
+        # A few Zoom schemas forget to declare every templated path parameter
+        # under `parameters`, even though the placeholders are present in the
+        # actual path template. We backfill those missing entries here so the
+        # contract suite still exercises the operation instead of failing early
+        # on an unresolved `{placeholder}` before any HTTP behavior is tested.
+        for placeholder in re.findall(r"\{([^}]+)\}", path):
+            if placeholder not in path_params:
+                path_params[placeholder] = example_from_schema(
+                    spec,
+                    {"type": "string"},
+                )
 
         request_json: Any | None = None
         request_body = op.get("requestBody")

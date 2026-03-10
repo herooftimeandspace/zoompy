@@ -37,6 +37,10 @@ The method handles:
 - JSON parsing
 - OpenAPI response validation
 
+The same `request()` method supports both ordinary Zoom endpoints and
+master-account endpoints. `zoompy` loads both path-based schema families and
+selects the matching OpenAPI operation from the request path automatically.
+
 ### Token caching and Server-to-Server OAuth
 
 When you do not provide an explicit `access_token`, `zoompy` performs the Zoom
@@ -75,6 +79,9 @@ registry.
 Use `scripts/sync_schemas.py` to refresh endpoint, master-account, and webhook
 documents from a manually curated URL list and mirror them into the test tree
 in one step.
+
+Those webhook schemas now serve both the repository's contract suites and the
+runtime webhook validator exposed by `ZoomClient.validate_webhook(...)`.
 
 If the response body does not match the documented schema, `zoompy` raises
 `ValueError` with a concise message that includes:
@@ -157,8 +164,7 @@ The package is intentionally split into a few small modules:
 - `zoompy.config`
   Environment loading and normalized settings assembly.
 - `zoompy.schema`
-  OpenAPI schema indexing, operation lookup, `$ref` resolution, and response
-  validation.
+  OpenAPI indexing, webhook lookup, `$ref` resolution, and payload validation.
 - `zoompy.logging`
   JSON log formatting and opt-in logger configuration.
 
@@ -181,9 +187,10 @@ arguments. Explicit constructor values win over environment values.
 
 `ZOOM_BASE_URL` is the client's fallback base URL. When the matched bundled
 OpenAPI schema declares a more specific server URL for an endpoint family, the
-client prefers that schema-declared server. This matters for endpoint groups
-such as Clips, SCIM, and file-upload APIs that do not consistently live under
-the default `/v2` server URL.
+client prefers that schema-declared server. This applies to both ordinary
+endpoints and master-account endpoints. It matters for endpoint groups such as
+Clips, SCIM, and file-upload APIs that do not consistently live under the
+default `/v2` server URL.
 
 If you already have a bearer token from another system, you can bypass OAuth:
 
@@ -245,6 +252,24 @@ with ZoomClient() as client:
         path_params={"meetingId": "123456789"},
     )
 ```
+
+### Webhook validation
+
+```python
+from zoompy import ZoomClient
+
+with ZoomClient() as client:
+    client.validate_webhook(
+        "meeting.started",
+        {
+            "event": "meeting.started",
+            "payload": {"object": {"id": "123456789"}},
+        },
+    )
+```
+
+When an event name is not unique enough on its own, narrow validation with
+`schema_name=` or `operation_id=`.
 
 ### Tuned retry policy
 
