@@ -6,66 +6,255 @@ bundled OpenAPI documents that ship with `zoompy`.
 
 These tests are intentionally opinionated. Their job is to pin the public SDK
 surface that outside projects are expected to rely on, especially across the
-largest endpoint families.
+largest and messiest endpoint families. When the dynamic SDK layer changes, we
+want failures here to read like a contract diff rather than a mystery.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from typing import Any
+
+import pytest
 from pydantic import BaseModel
 
 from zoompy import ZoomClient, __version__
 
+_TOP_LEVEL_NAMESPACE_CHECKS = (
+    "users.list",
+    "users.get",
+    "phone.users.get",
+    "phone.users.update_profile",
+    "phone.call_queues.list",
+    "phone.devices.get",
+    "rooms.get_profile",
+    "rooms.list_rooms",
+    "rooms.delete_room",
+    "rooms.locations.list",
+    "rooms.locations.get_profile",
+    "whiteboard.get_whiteboard",
+    "whiteboard.update_metadata",
+    "whiteboard.projects.list",
+    "meetings.update_meeting",
+    "chat.channels.get_account",
+)
 
-def _build_client() -> ZoomClient:
-    """Create a client that can inspect bundled schemas without live auth."""
+_HELPER_METHOD_CHECKS = (
+    "users.list.iter_pages",
+    "users.list.iter_all",
+    "users.list.paginate",
+    "users.get.raw",
+)
 
-    return ZoomClient(access_token="test-access-token")
+_STABLE_OPERATION_IDS = {
+    "users.list": "users",
+    "users.get": "user",
+    "phone.users.get": "phoneUser",
+    "phone.users.update_profile": "updateUserProfile",
+    "phone.call_queues.list": "listCallQueues",
+    "phone.call_queues.get": "getACallQueue",
+    "phone.devices.list": "listPhoneDevices",
+    "phone.devices.get": "getADevice",
+    "meetings.meeting_summaries.list": "Listmeetingsummaries",
+    "meetings.update_meeting": "meetingUpdate",
+    "chat.channels.get": "getUserLevelChannel",
+    "chat.channels.get_account": "getAccountChannels",
+    "rooms.add_room": "addARoom",
+    "rooms.delete_room": "deleteAZoomRoom",
+    "rooms.get_profile": "getZRProfile",
+    "rooms.list_rooms": "listZoomRooms",
+    "rooms.update_profile": "updateRoomProfile",
+    "rooms.locations.list": "listZRLocations",
+    "rooms.locations.get_profile": "getZRLocationProfile",
+    "rooms.locations.update_profile": "updateZRLocationProfile",
+    "scheduler.schedules.get": "get_schedule",
+    "whiteboard.get_whiteboard": "GetAWhiteboard",
+    "whiteboard.delete_whiteboard": "DeleteAWhiteboard",
+    "whiteboard.update_metadata": "UpdateAWhiteboardMetadata",
+    "whiteboard.projects.list": "Listallprojects",
+    "whiteboard.projects.get": "Getaproject",
+    "whiteboard.projects.create": "Createproject",
+}
+
+_ALIAS_EQUIVALENTS = {
+    "phone.devices.get": "phone.devices.get_device",
+    "phone.call_queues.get": "phone.call_queues.get_call_queue",
+    "chat.channels.get_account": "chat.channels.get_account_channels",
+    "rooms.get_profile": "rooms.get_zr_profile",
+    "rooms.locations.get_profile": "rooms.locations.get_zr_location_profile",
+    "whiteboard.get_whiteboard": "whiteboard.get_a_whiteboard",
+    "whiteboard.projects.get": "whiteboard.projects.getaproject",
+}
+
+_PREFERRED_ALIAS_PRESENCE = {
+    "phone.users": ("get", "list", "update_profile"),
+    "phone.devices": ("get", "list", "update", "delete", "create"),
+    "chat.channels": (
+        "get",
+        "get_account",
+        "delete_user_level",
+        "update_user_level",
+    ),
+    "rooms": ("add_room", "delete_room", "get_profile", "list_rooms", "update_profile"),
+    "whiteboard": ("get_whiteboard", "delete_whiteboard", "update_metadata"),
+    "whiteboard.projects": ("get", "list", "create"),
+}
+
+_TYPED_MODEL_EXPECTATIONS = {
+    "phone.users.get": {"response": True, "request": False},
+    "phone.devices.get": {"response": True, "request": False},
+    "phone.call_queues.get": {"response": True, "request": False},
+    "chat.channels.get": {"response": True, "request": False},
+    "chat.channels.get_account": {"response": True, "request": False},
+    "rooms.get_profile": {"response": True, "request": False},
+    "rooms.locations.get_profile": {"response": True, "request": False},
+    "whiteboard.get_whiteboard": {"response": True, "request": False},
+    "whiteboard.projects.get": {"response": True, "request": False},
+    "whiteboard.projects.create": {"response": True, "request": True},
+}
+
+_SCHEMA_PARAMETER_NAMES = {
+    "phone.users.get": {"path": ["user_id"], "query": []},
+    "phone.users.update_profile": {"path": ["user_id"], "query": []},
+    "phone.call_queues.get": {"path": ["call_queue_id"], "query": []},
+    "phone.devices.get": {"path": ["device_id"], "query": []},
+    "chat.channels.get_account": {
+        "path": [],
+        "query": ["page_size", "next_page_token"],
+    },
+    "chat.channels.delete_user_level": {
+        "path": ["channel_id"],
+        "query": [],
+    },
+    "rooms.get_profile": {
+        "path": ["room_id"],
+        "query": ["regenerate_activation_code"],
+    },
+    "rooms.locations.get_profile": {
+        "path": ["location_id"],
+        "query": [],
+    },
+    "whiteboard.get_whiteboard": {
+        "path": ["whiteboard_id"],
+        "query": [],
+    },
+    "whiteboard.projects.get": {
+        "path": ["project_id"],
+        "query": [],
+    },
+}
 
 
-def test_real_schema_sdk_exposes_expected_top_level_namespaces() -> None:
-    """Expose well-known endpoint families from the real packaged schemas."""
+@pytest.fixture
+def client() -> Iterator[ZoomClient]:
+    """Create one schema-only client per test and close it reliably.
 
-    client = _build_client()
+    These tests never hit the network. They only inspect the SDK surface that
+    `zoompy` builds from packaged schemas, so an explicit access token is
+    enough to bypass live OAuth.
+    """
+
+    sdk_client = ZoomClient(access_token="test-access-token")
     try:
-        assert "users" in dir(client)
-        assert "phone" in dir(client)
-        assert "meetings" in dir(client)
-
-        assert callable(client.users.list)
-        assert callable(client.users.get)
-        assert callable(client.phone.users.get)
-        assert callable(client.phone.users.update_profile)
-        assert callable(client.phone.call_queues.list)
-        assert callable(client.phone.devices.get)
-        assert callable(client.rooms.get_profile)
-        assert callable(client.rooms.list_rooms)
-        assert callable(client.rooms.delete_room)
-        assert callable(client.rooms.locations.list)
-        assert callable(client.rooms.locations.get_profile)
-        assert callable(client.whiteboard.get_whiteboard)
-        assert callable(client.whiteboard.update_metadata)
-        assert callable(client.whiteboard.projects.list)
-        assert callable(client.meetings.update_meeting)
-        assert callable(client.chat.channels.get_account)
-        assert callable(client.users.list.iter_pages)
-        assert callable(client.users.list.iter_all)
-        assert callable(client.users.list.paginate)
-        assert callable(client.users.get.raw)
-        assert not hasattr(client.phone, "call_queue_analytic")
+        yield sdk_client
     finally:
-        client.close()
+        sdk_client.close()
 
 
-def test_real_schema_sdk_exposes_typed_models_for_common_operations() -> None:
-    """Build request and response models from the real bundled schemas."""
+def _resolve_member(root: Any, dotted_path: str) -> Any:
+    """Resolve a dotted SDK path like `phone.devices.get` from the client.
 
-    client = _build_client()
-    try:
-        get_user_model = client.users.get.response_model
-        create_user_request_model = client.users.create.request_model
-        get_phone_user_model = client.phone.users.get.response_model
-    finally:
-        client.close()
+    Keeping path resolution in one helper makes the test data much easier to
+    read. The golden constants above can stay focused on the public contract
+    instead of repeating nested attribute access everywhere.
+    """
+
+    member = root
+    for part in dotted_path.split("."):
+        member = getattr(member, part)
+    return member
+
+
+def _collect_operation_ids(client: ZoomClient, paths: tuple[str, ...]) -> dict[str, str]:
+    """Map dotted SDK method paths to their underlying OpenAPI operation IDs."""
+
+    return {
+        path: _resolve_member(client, path)._operation.operation_id
+        for path in paths
+    }
+
+
+def _collect_preferred_aliases(
+    client: ZoomClient, expectations: dict[str, tuple[str, ...]]
+) -> dict[str, dict[str, bool]]:
+    """Record whether each preferred alias exists on the target namespace."""
+
+    return {
+        namespace: {
+            alias: hasattr(_resolve_member(client, namespace), alias)
+            for alias in aliases
+        }
+        for namespace, aliases in expectations.items()
+    }
+
+
+def _collect_model_flags(
+    client: ZoomClient, expectations: dict[str, dict[str, bool]]
+) -> dict[str, dict[str, bool]]:
+    """Collect request/response model availability for selected methods."""
+
+    flags: dict[str, dict[str, bool]] = {}
+    for path in expectations:
+        method = _resolve_member(client, path)
+        flags[path] = {
+            "response": method.response_model is not None,
+            "request": method.request_model is not None,
+        }
+    return flags
+
+
+def _collect_parameter_names(
+    client: ZoomClient, expectations: dict[str, dict[str, list[str]]]
+) -> dict[str, dict[str, list[str]]]:
+    """Collect normalized snake_case path/query parameter names."""
+
+    names: dict[str, dict[str, list[str]]] = {}
+    for path in expectations:
+        operation = _resolve_member(client, path)._operation
+        names[path] = {
+            "path": [
+                parameter.python_name for parameter in operation.path_parameters
+            ],
+            "query": [
+                parameter.python_name for parameter in operation.query_parameters
+            ],
+        }
+    return names
+
+
+def test_real_schema_sdk_exposes_expected_top_level_namespaces(
+    client: ZoomClient,
+) -> None:
+    """Expose the top-level SDK surface that scripts are expected to use."""
+
+    assert "users" in dir(client)
+    assert "phone" in dir(client)
+    assert "meetings" in dir(client)
+
+    for path in _TOP_LEVEL_NAMESPACE_CHECKS + _HELPER_METHOD_CHECKS:
+        assert callable(_resolve_member(client, path))
+
+    assert not hasattr(client.phone, "call_queue_analytic")
+
+
+def test_real_schema_sdk_exposes_typed_models_for_common_operations(
+    client: ZoomClient,
+) -> None:
+    """Build typed models from packaged schemas for representative methods."""
+
+    get_user_model = client.users.get.response_model
+    create_user_request_model = client.users.create.request_model
+    get_phone_user_model = client.phone.users.get.response_model
 
     assert get_user_model is not None
     assert create_user_request_model is not None
@@ -76,14 +265,12 @@ def test_real_schema_sdk_exposes_typed_models_for_common_operations() -> None:
     assert issubclass(get_phone_user_model, BaseModel)
 
 
-def test_real_schema_sdk_docstrings_include_operation_metadata() -> None:
+def test_real_schema_sdk_docstrings_include_operation_metadata(
+    client: ZoomClient,
+) -> None:
     """Keep generated SDK methods understandable in editors and shells."""
 
-    client = _build_client()
-    try:
-        docstring = client.phone.users.get.__doc__
-    finally:
-        client.close()
+    docstring = client.phone.users.get.__doc__
 
     assert docstring is not None
     assert "Operation ID:" in docstring
@@ -91,555 +278,87 @@ def test_real_schema_sdk_docstrings_include_operation_metadata() -> None:
     assert "/phone/users/{userId}" in docstring
 
 
-def test_real_schema_sdk_common_method_names_are_stable() -> None:
-    """Pin a few important public method names as a golden SDK contract."""
+def test_real_schema_sdk_operation_ids_stay_stable(client: ZoomClient) -> None:
+    """Pin the preferred public SDK methods to specific OpenAPI operations."""
 
-    client = _build_client()
-    try:
-        assert client.users.list._operation.operation_id == "users"
-        assert client.users.get._operation.operation_id == "user"
-        assert client.phone.users.get._operation.operation_id == "phoneUser"
-        assert client.phone.users.update_profile._operation.operation_id == (
-            "updateUserProfile"
-        )
-        assert client.phone.devices.get._operation.operation_id == "getADevice"
-        assert client.rooms.get_profile._operation.operation_id == "getZRProfile"
-        assert client.rooms.locations.get_profile._operation.operation_id == (
-            "getZRLocationProfile"
-        )
-        assert client.rooms.list_rooms._operation.operation_id == "listZoomRooms"
-        assert client.chat.channels.get_account._operation.operation_id == (
-            "getAccountChannels"
-        )
-        assert client.whiteboard.update_metadata._operation.operation_id == (
-            "UpdateAWhiteboardMetadata"
-        )
-        assert client.whiteboard.projects.list._operation.operation_id == (
-            "Listallprojects"
-        )
-    finally:
-        client.close()
+    operation_ids = _collect_operation_ids(
+        client, tuple(_STABLE_OPERATION_IDS.keys())
+    )
+
+    assert operation_ids == _STABLE_OPERATION_IDS
 
 
-def test_real_schema_sdk_golden_matrix_for_major_families() -> None:
-    """Pin a broader set of stable public SDK methods across major families."""
+def test_real_schema_sdk_prefers_clean_aliases_for_noisy_families(
+    client: ZoomClient,
+) -> None:
+    """Keep cleaner aliases mapped to the same operations as fallback names.
 
-    client = _build_client()
-    try:
-        matrix = {
-            "users.list": client.users.list._operation.operation_id,
-            "users.get": client.users.get._operation.operation_id,
-            "phone.users.get": client.phone.users.get._operation.operation_id,
-            "phone.users.update_profile": (
-                client.phone.users.update_profile._operation.operation_id
-            ),
-            "phone.call_queues.list": (
-                client.phone.call_queues.list._operation.operation_id
-            ),
-            "phone.call_queues.get": (
-                client.phone.call_queues.get._operation.operation_id
-            ),
-            "phone.devices.list": client.phone.devices.list._operation.operation_id,
-            "phone.devices.get": client.phone.devices.get._operation.operation_id,
-            "meetings.meeting_summaries.list": (
-                client.meetings.meeting_summaries.list._operation.operation_id
-            ),
-            "meetings.update_meeting": (
-                client.meetings.update_meeting._operation.operation_id
-            ),
-            "chat.channels.get": client.chat.channels.get._operation.operation_id,
-            "chat.channels.get_account": (
-                client.chat.channels.get_account._operation.operation_id
-            ),
-            "rooms.add_room": client.rooms.add_room._operation.operation_id,
-            "rooms.delete_room": client.rooms.delete_room._operation.operation_id,
-            "rooms.get_profile": client.rooms.get_profile._operation.operation_id,
-            "rooms.list_rooms": client.rooms.list_rooms._operation.operation_id,
-            "rooms.update_profile": client.rooms.update_profile._operation.operation_id,
-            "rooms.locations.list": (
-                client.rooms.locations.list._operation.operation_id
-            ),
-            "rooms.locations.get_profile": (
-                client.rooms.locations.get_profile._operation.operation_id
-            ),
-            "rooms.locations.update_profile": (
-                client.rooms.locations.update_profile._operation.operation_id
-            ),
-            "scheduler.schedules.get": (
-                client.scheduler.schedules.get._operation.operation_id
-            ),
-            "whiteboard.get_whiteboard": (
-                client.whiteboard.get_whiteboard._operation.operation_id
-            ),
-            "whiteboard.delete_whiteboard": (
-                client.whiteboard.delete_whiteboard._operation.operation_id
-            ),
-            "whiteboard.update_metadata": (
-                client.whiteboard.update_metadata._operation.operation_id
-            ),
-            "whiteboard.projects.list": (
-                client.whiteboard.projects.list._operation.operation_id
-            ),
-            "whiteboard.projects.get": (
-                client.whiteboard.projects.get._operation.operation_id
-            ),
-            "whiteboard.projects.create": (
-                client.whiteboard.projects.create._operation.operation_id
-            ),
-        }
-    finally:
-        client.close()
-
-    assert matrix == {
-        "users.list": "users",
-        "users.get": "user",
-        "phone.users.get": "phoneUser",
-        "phone.users.update_profile": "updateUserProfile",
-        "phone.call_queues.list": "listCallQueues",
-        "phone.call_queues.get": "getACallQueue",
-        "phone.devices.list": "listPhoneDevices",
-        "phone.devices.get": "getADevice",
-        "meetings.meeting_summaries.list": "Listmeetingsummaries",
-        "meetings.update_meeting": "meetingUpdate",
-        "chat.channels.get": "getUserLevelChannel",
-        "chat.channels.get_account": "getAccountChannels",
-        "rooms.add_room": "addARoom",
-        "rooms.delete_room": "deleteAZoomRoom",
-        "rooms.get_profile": "getZRProfile",
-        "rooms.list_rooms": "listZoomRooms",
-        "rooms.update_profile": "updateRoomProfile",
-        "rooms.locations.list": "listZRLocations",
-        "rooms.locations.get_profile": "getZRLocationProfile",
-        "rooms.locations.update_profile": "updateZRLocationProfile",
-        "scheduler.schedules.get": "get_schedule",
-        "whiteboard.get_whiteboard": "GetAWhiteboard",
-        "whiteboard.delete_whiteboard": "DeleteAWhiteboard",
-        "whiteboard.update_metadata": "UpdateAWhiteboardMetadata",
-        "whiteboard.projects.list": "Listallprojects",
-        "whiteboard.projects.get": "Getaproject",
-        "whiteboard.projects.create": "Createproject",
-    }
-
-
-def test_real_schema_sdk_prefers_clean_aliases_for_noisy_families() -> None:
-    """Pin the preferred public aliases on the ugliest real Zoom families.
-
-    The bundled schemas still produce a number of raw fallback names such as
-    `get_a_device`, `getaproject`, and `get_zr_profile`. Those fallbacks are
-    still useful as escape hatches, but they are not the public shape we want
-    people to learn first.
-
-    This test keeps the preferred aliases stable and also proves that the
-    fallback spellings still resolve to the same underlying OpenAPI operation.
-    That makes refactors safer because we can improve alias generation without
-    silently changing which operation a preferred method name calls.
+    The ugliest Zoom families still expose raw generated spellings such as
+    `get_device` or `getaproject`. Those fallbacks are useful escape hatches,
+    but the preferred aliases should remain the obvious public surface.
     """
 
-    client = _build_client()
-    try:
-        alias_pairs = {
-            "phone.devices.get": (
-                client.phone.devices.get._operation.operation_id,
-                client.phone.devices.get_device._operation.operation_id,
-            ),
-            "phone.call_queues.get": (
-                client.phone.call_queues.get._operation.operation_id,
-                client.phone.call_queues.get_call_queue._operation.operation_id,
-            ),
-            "chat.channels.get_account": (
-                client.chat.channels.get_account._operation.operation_id,
-                client.chat.channels.get_account_channels._operation.operation_id,
-            ),
-            "rooms.get_profile": (
-                client.rooms.get_profile._operation.operation_id,
-                client.rooms.get_zr_profile._operation.operation_id,
-            ),
-            "rooms.locations.get_profile": (
-                client.rooms.locations.get_profile._operation.operation_id,
-                client.rooms.locations.get_zr_location_profile._operation.operation_id,
-            ),
-            "whiteboard.get_whiteboard": (
-                client.whiteboard.get_whiteboard._operation.operation_id,
-                client.whiteboard.get_a_whiteboard._operation.operation_id,
-            ),
-            "whiteboard.projects.get": (
-                client.whiteboard.projects.get._operation.operation_id,
-                client.whiteboard.projects.getaproject._operation.operation_id,
-            ),
-        }
-    finally:
-        client.close()
+    alias_pairs = {
+        preferred: (
+            _resolve_member(client, preferred)._operation.operation_id,
+            _resolve_member(client, fallback)._operation.operation_id,
+        )
+        for preferred, fallback in _ALIAS_EQUIVALENTS.items()
+    }
 
     assert alias_pairs == {
-        "phone.devices.get": ("getADevice", "getADevice"),
-        "phone.call_queues.get": ("getACallQueue", "getACallQueue"),
-        "chat.channels.get_account": (
-            "getAccountChannels",
-            "getAccountChannels",
-        ),
-        "rooms.get_profile": ("getZRProfile", "getZRProfile"),
-        "rooms.locations.get_profile": (
-            "getZRLocationProfile",
-            "getZRLocationProfile",
-        ),
-        "whiteboard.get_whiteboard": (
-            "GetAWhiteboard",
-            "GetAWhiteboard",
-        ),
-        "whiteboard.projects.get": ("Getaproject", "Getaproject"),
+        preferred: (
+            _STABLE_OPERATION_IDS[preferred],
+            _STABLE_OPERATION_IDS[preferred],
+        )
+        for preferred in _ALIAS_EQUIVALENTS
     }
 
 
-def test_real_schema_sdk_exposes_preferred_aliases_on_noisy_families() -> None:
-    """Keep the preferred public surface visible on the ugliest namespaces.
+def test_real_schema_sdk_exposes_preferred_aliases_on_noisy_families(
+    client: ZoomClient,
+) -> None:
+    """Keep the clean public aliases visible on the messiest namespaces."""
 
-    The SDK still exposes a number of raw generated fallbacks for compatibility
-    and discoverability, but outside callers should be able to rely on a
-    smaller set of clean aliases first. This test pins that preferred shape.
-    """
-
-    client = _build_client()
-    try:
-        preferred_aliases = {
-            "phone.users": {
-                "get": hasattr(client.phone.users, "get"),
-                "list": hasattr(client.phone.users, "list"),
-                "update_profile": hasattr(client.phone.users, "update_profile"),
-            },
-            "phone.devices": {
-                "get": hasattr(client.phone.devices, "get"),
-                "list": hasattr(client.phone.devices, "list"),
-                "update": hasattr(client.phone.devices, "update"),
-                "delete": hasattr(client.phone.devices, "delete"),
-                "create": hasattr(client.phone.devices, "create"),
-            },
-            "chat.channels": {
-                "get": hasattr(client.chat.channels, "get"),
-                "get_account": hasattr(client.chat.channels, "get_account"),
-                "delete_user_level": hasattr(
-                    client.chat.channels, "delete_user_level"
-                ),
-                "update_user_level": hasattr(
-                    client.chat.channels, "update_user_level"
-                ),
-            },
-            "rooms": {
-                "add_room": hasattr(client.rooms, "add_room"),
-                "delete_room": hasattr(client.rooms, "delete_room"),
-                "get_profile": hasattr(client.rooms, "get_profile"),
-                "list_rooms": hasattr(client.rooms, "list_rooms"),
-                "update_profile": hasattr(client.rooms, "update_profile"),
-            },
-            "whiteboard": {
-                "get_whiteboard": hasattr(client.whiteboard, "get_whiteboard"),
-                "delete_whiteboard": hasattr(
-                    client.whiteboard, "delete_whiteboard"
-                ),
-                "update_metadata": hasattr(client.whiteboard, "update_metadata"),
-            },
-            "whiteboard.projects": {
-                "get": hasattr(client.whiteboard.projects, "get"),
-                "list": hasattr(client.whiteboard.projects, "list"),
-                "create": hasattr(client.whiteboard.projects, "create"),
-            },
-        }
-    finally:
-        client.close()
-
-    assert preferred_aliases == {
-        "phone.users": {
-            "get": True,
-            "list": True,
-            "update_profile": True,
-        },
-        "phone.devices": {
-            "get": True,
-            "list": True,
-            "update": True,
-            "delete": True,
-            "create": True,
-        },
-        "chat.channels": {
-            "get": True,
-            "get_account": True,
-            "delete_user_level": True,
-            "update_user_level": True,
-        },
-        "rooms": {
-            "add_room": True,
-            "delete_room": True,
-            "get_profile": True,
-            "list_rooms": True,
-            "update_profile": True,
-        },
-        "whiteboard": {
-            "get_whiteboard": True,
-            "delete_whiteboard": True,
-            "update_metadata": True,
-        },
-        "whiteboard.projects": {
-            "get": True,
-            "list": True,
-            "create": True,
-        },
+    assert _collect_preferred_aliases(client, _PREFERRED_ALIAS_PRESENCE) == {
+        namespace: {alias: True for alias in aliases}
+        for namespace, aliases in _PREFERRED_ALIAS_PRESENCE.items()
     }
 
 
-def test_real_schema_sdk_exposes_typed_models_on_noisy_families() -> None:
-    """Pin typed model availability on the most awkward real operations.
+def test_real_schema_sdk_exposes_typed_models_on_noisy_families(
+    client: ZoomClient,
+) -> None:
+    """Pin typed-model availability on the ugliest real families.
 
-    The SDK is supposed to feel like a scripting SDK, not a thin JSON wrapper.
-    These assertions keep that promise visible on the messy parts of the Zoom
-    surface where it is easiest to regress back toward untyped behavior.
+    This keeps the dynamic SDK honest: the noisy parts of the Zoom API should
+    still feel like a typed scripting SDK, not a thin JSON wrapper.
     """
 
-    client = _build_client()
-    try:
-        model_matrix = {
-            "phone.users.get": {
-                "response": client.phone.users.get.response_model,
-                "request": client.phone.users.get.request_model,
-            },
-            "phone.devices.get": {
-                "response": client.phone.devices.get.response_model,
-                "request": client.phone.devices.get.request_model,
-            },
-            "phone.call_queues.get": {
-                "response": client.phone.call_queues.get.response_model,
-                "request": client.phone.call_queues.get.request_model,
-            },
-            "chat.channels.get": {
-                "response": client.chat.channels.get.response_model,
-                "request": client.chat.channels.get.request_model,
-            },
-            "chat.channels.get_account": {
-                "response": client.chat.channels.get_account.response_model,
-                "request": client.chat.channels.get_account.request_model,
-            },
-            "rooms.get_profile": {
-                "response": client.rooms.get_profile.response_model,
-                "request": client.rooms.get_profile.request_model,
-            },
-            "rooms.locations.get_profile": {
-                "response": client.rooms.locations.get_profile.response_model,
-                "request": client.rooms.locations.get_profile.request_model,
-            },
-            "whiteboard.get_whiteboard": {
-                "response": client.whiteboard.get_whiteboard.response_model,
-                "request": client.whiteboard.get_whiteboard.request_model,
-            },
-            "whiteboard.projects.get": {
-                "response": client.whiteboard.projects.get.response_model,
-                "request": client.whiteboard.projects.get.request_model,
-            },
-            "whiteboard.projects.create": {
-                "response": client.whiteboard.projects.create.response_model,
-                "request": client.whiteboard.projects.create.request_model,
-            },
-        }
-    finally:
-        client.close()
+    model_flags = _collect_model_flags(client, _TYPED_MODEL_EXPECTATIONS)
 
-    assert model_matrix["phone.users.get"]["response"] is not None
-    assert model_matrix["phone.devices.get"]["response"] is not None
-    assert model_matrix["phone.call_queues.get"]["response"] is not None
-    assert model_matrix["chat.channels.get"]["response"] is not None
-    assert model_matrix["chat.channels.get_account"]["response"] is not None
-    assert model_matrix["rooms.get_profile"]["response"] is not None
-    assert model_matrix["rooms.locations.get_profile"]["response"] is not None
-    assert model_matrix["whiteboard.get_whiteboard"]["response"] is not None
-    assert model_matrix["whiteboard.projects.get"]["response"] is not None
-    assert model_matrix["whiteboard.projects.create"]["response"] is not None
-    assert model_matrix["whiteboard.projects.create"]["request"] is not None
+    assert model_flags == _TYPED_MODEL_EXPECTATIONS
 
-    for entry in model_matrix.values():
-        response_model = entry["response"]
-        request_model = entry["request"]
-        if response_model is not None:
-            assert issubclass(response_model, BaseModel)
-        if request_model is not None:
-            assert issubclass(request_model, BaseModel)
+    for path in _TYPED_MODEL_EXPECTATIONS:
+        method = _resolve_member(client, path)
+        if method.response_model is not None:
+            assert issubclass(method.response_model, BaseModel)
+        if method.request_model is not None:
+            assert issubclass(method.request_model, BaseModel)
 
 
-def test_real_schema_sdk_keeps_schema_derived_parameter_names() -> None:
+def test_real_schema_sdk_keeps_schema_derived_parameter_names(
+    client: ZoomClient,
+) -> None:
     """Require schema-derived snake_case parameter names on noisy methods.
 
-    Generated SDK methods currently accept `**kwargs`, so Python signatures are
-    intentionally loose. The stable source of truth is the normalized operation
-    metadata behind each method.
-
-    This test pins the path and query parameter names that scripts are expected
-    to use. If alias generation or schema normalization changes accidentally,
-    these assertions make that break obvious immediately.
+    Generated SDK methods intentionally accept `**kwargs`, so the stable source
+    of truth is the normalized operation metadata behind each method.
     """
 
-    client = _build_client()
-    try:
-        parameter_matrix = {
-            "phone.users.get": {
-                "path": [
-                    parameter.python_name
-                    for parameter in client.phone.users.get._operation.path_parameters
-                ],
-                "query": [
-                    parameter.python_name
-                    for parameter in client.phone.users.get._operation.query_parameters
-                ],
-            },
-            "phone.users.update_profile": {
-                "path": [
-                    parameter.python_name
-                    for parameter in (
-                        client.phone.users.update_profile._operation.path_parameters
-                    )
-                ],
-                "query": [
-                    parameter.python_name
-                    for parameter in (
-                        client.phone.users.update_profile._operation.query_parameters
-                    )
-                ],
-            },
-            "phone.call_queues.get": {
-                "path": [
-                    parameter.python_name
-                    for parameter in (
-                        client.phone.call_queues.get._operation.path_parameters
-                    )
-                ],
-                "query": [
-                    parameter.python_name
-                    for parameter in (
-                        client.phone.call_queues.get._operation.query_parameters
-                    )
-                ],
-            },
-            "phone.devices.get": {
-                "path": [
-                    parameter.python_name
-                    for parameter in client.phone.devices.get._operation.path_parameters
-                ],
-                "query": [
-                    parameter.python_name
-                    for parameter in (
-                        client.phone.devices.get._operation.query_parameters
-                    )
-                ],
-            },
-            "chat.channels.get_account": {
-                "path": [
-                    parameter.python_name
-                    for parameter in (
-                        client.chat.channels.get_account._operation.path_parameters
-                    )
-                ],
-                "query": [
-                    parameter.python_name
-                    for parameter in (
-                        client.chat.channels.get_account._operation.query_parameters
-                    )
-                ],
-            },
-            "chat.channels.delete_user_level": {
-                "path": [
-                    parameter.python_name
-                    for parameter in (
-                        client.chat.channels.delete_user_level._operation.path_parameters
-                    )
-                ],
-                "query": [
-                    parameter.python_name
-                    for parameter in (
-                        client.chat.channels.delete_user_level._operation.query_parameters
-                    )
-                ],
-            },
-            "rooms.get_profile": {
-                "path": [
-                    parameter.python_name
-                    for parameter in client.rooms.get_profile._operation.path_parameters
-                ],
-                "query": [
-                    parameter.python_name
-                    for parameter in client.rooms.get_profile._operation.query_parameters
-                ],
-            },
-            "rooms.locations.get_profile": {
-                "path": [
-                    parameter.python_name
-                    for parameter in (
-                        client.rooms.locations.get_profile._operation.path_parameters
-                    )
-                ],
-                "query": [
-                    parameter.python_name
-                    for parameter in (
-                        client.rooms.locations.get_profile._operation.query_parameters
-                    )
-                ],
-            },
-            "whiteboard.get_whiteboard": {
-                "path": [
-                    parameter.python_name
-                    for parameter in (
-                        client.whiteboard.get_whiteboard._operation.path_parameters
-                    )
-                ],
-                "query": [
-                    parameter.python_name
-                    for parameter in (
-                        client.whiteboard.get_whiteboard._operation.query_parameters
-                    )
-                ],
-            },
-            "whiteboard.projects.get": {
-                "path": [
-                    parameter.python_name
-                    for parameter in (
-                        client.whiteboard.projects.get._operation.path_parameters
-                    )
-                ],
-                "query": [
-                    parameter.python_name
-                    for parameter in (
-                        client.whiteboard.projects.get._operation.query_parameters
-                    )
-                ],
-            },
-        }
-    finally:
-        client.close()
-
-    assert parameter_matrix == {
-        "phone.users.get": {"path": ["user_id"], "query": []},
-        "phone.users.update_profile": {"path": ["user_id"], "query": []},
-        "phone.call_queues.get": {"path": ["call_queue_id"], "query": []},
-        "phone.devices.get": {"path": ["device_id"], "query": []},
-        "chat.channels.get_account": {
-            "path": [],
-            "query": ["page_size", "next_page_token"],
-        },
-        "chat.channels.delete_user_level": {
-            "path": ["channel_id"],
-            "query": [],
-        },
-        "rooms.get_profile": {
-            "path": ["room_id"],
-            "query": ["regenerate_activation_code"],
-        },
-        "rooms.locations.get_profile": {
-            "path": ["location_id"],
-            "query": [],
-        },
-        "whiteboard.get_whiteboard": {
-            "path": ["whiteboard_id"],
-            "query": [],
-        },
-        "whiteboard.projects.get": {
-            "path": ["project_id"],
-            "query": [],
-        },
-    }
+    assert _collect_parameter_names(client, _SCHEMA_PARAMETER_NAMES) == (
+        _SCHEMA_PARAMETER_NAMES
+    )
 
 
 def test_package_exposes_a_stable_version_string() -> None:
