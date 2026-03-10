@@ -14,7 +14,7 @@ from jsonschema.validators import validator_for
 
 
 # These tests define the *contract* for an Accounts API client.
-# Implementations should provide a `ZoomClient` class at `zoomapi.client`.
+# Implementations should provide a `ZoomClient` class at `zoompy.client`.
 #
 # The client is expected to:
 # - Use https://api.zoom.us/v2 as default base URL (override-able).
@@ -78,7 +78,7 @@ class _ClientFactory:
     base_url: str = "https://api.zoom.us/v2"
 
     def create(self):
-        from zoomapi.client import ZoomClient
+        from zoompy.client import ZoomClient
 
         return ZoomClient(access_token=self.token, base_url=self.base_url)
 
@@ -125,7 +125,7 @@ def test_non_2xx_responses_raise_zoom_api_error(client_factory: _ClientFactory, 
             404, json={"message": "Not found"}
         )
 
-        from zoomapi.errors import ZoomAPIError
+        from zoompy.errors import ZoomAPIError
 
         with pytest.raises(ZoomAPIError) as ei:
             client.accounts.get_managed_domains(account_id)
