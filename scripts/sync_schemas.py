@@ -11,13 +11,16 @@ The workflow is intentionally simple and deterministic:
 3. Keep only documents that look like OpenAPI schemas.
 4. Match endpoint schemas to local files by `info.title`.
 5. Derive companion webhook URLs and store them in a separate webhook tree.
-6. Mirror both canonical trees into the test directory structure.
+6. Derive optional master-account URLs and store them in a separate tree.
+7. Mirror all canonical trees into the test directory structure.
 
-`src/zoompy/schemas` is the canonical source of truth for runtime API response
-validation. Webhook documents are stored separately under
-`src/zoompy/webhooks` because they use the OpenAPI `webhooks` section rather
-than `paths`, and therefore should not be mixed into the request/response
-schema registry used by the client.
+`src/zoompy/endpoints` is the canonical source of truth for ordinary runtime
+API response validation. Master-account documents are stored separately under
+`src/zoompy/master_accounts` so they can mirror the same product-family layout
+without colliding with ordinary endpoint filenames. Webhook documents are
+stored separately under `src/zoompy/webhooks` because they use the OpenAPI
+`webhooks` section rather than `paths`, and therefore should not be mixed into
+the request/response schema registry used by the client.
 """
 
 from __future__ import annotations
@@ -33,8 +36,10 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
-DEFAULT_CANONICAL_ROOT = Path("src/zoompy/schemas")
-DEFAULT_TEST_ROOT = Path("src/tests/schemas")
+DEFAULT_CANONICAL_ROOT = Path("src/zoompy/endpoints")
+DEFAULT_TEST_ROOT = Path("src/tests/endpoints")
+DEFAULT_MASTER_ACCOUNT_ROOT = Path("src/zoompy/master_accounts")
+DEFAULT_TEST_MASTER_ACCOUNT_ROOT = Path("src/tests/master_accounts")
 DEFAULT_WEBHOOK_ROOT = Path("src/zoompy/webhooks")
 DEFAULT_TEST_WEBHOOK_ROOT = Path("src/tests/webhooks")
 DEFAULT_CACHE_ROOT = Path(".cache/zoompy-schema-sync")
@@ -103,6 +108,24 @@ def parse_args() -> argparse.Namespace:
         help="Mirrored schema directory used by the contract tests.",
     )
     parser.add_argument(
+        "--master-account-root",
+        type=Path,
+        default=DEFAULT_MASTER_ACCOUNT_ROOT,
+        help=(
+            "Canonical master-account schema directory used for downloaded "
+            "master account specs."
+        ),
+    )
+    parser.add_argument(
+        "--test-master-account-root",
+        type=Path,
+        default=DEFAULT_TEST_MASTER_ACCOUNT_ROOT,
+        help=(
+            "Mirrored master-account schema directory used by tests and "
+            "development tooling."
+        ),
+    )
+    parser.add_argument(
         "--webhook-root",
         type=Path,
         default=DEFAULT_WEBHOOK_ROOT,
@@ -134,7 +157,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--skip-mirror",
         action="store_true",
-        help="Update canonical schemas without mirroring them into src/tests/schemas.",
+        help=(
+            "Update canonical endpoint, master-account, and webhook schemas "
+            "without mirroring them into src/tests."
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -160,7 +186,8 @@ def load_manifest(path: Path) -> list[SchemaSource]:
         {
           "url": "https://developers.zoom.us/api-hub/iq/methods/endpoints.json",
           "expected_title": "Revenue Accelerator",
-          "webhook_expected_title": "Zoom Revenue Accelerator Webhooks"
+          "webhook_expected_title": "Zoom Revenue Accelerator Webhooks",
+          "master_account_expected_title": "Revenue Accelerator"
         }
       ]
     }
@@ -170,10 +197,11 @@ def load_manifest(path: Path) -> list[SchemaSource]:
     state the title you expect the remote schema to declare, which is useful
     when the URL path itself does not resemble the local filename.
 
-    Each manifest entry implicitly represents two downloads:
+    Each manifest entry implicitly represents three downloads:
 
     * the endpoint schema at `.../methods/endpoints.json`
-    * the companion webhook schema at `.../events/webhooks.json`
+    * the optional companion webhook schema at `.../events/webhooks.json`
+    * the optional master-account schema at `.../ma/master.json`
     """
 
     if not path.exists():
@@ -197,6 +225,9 @@ def load_manifest(path: Path) -> list[SchemaSource]:
             url = entry.get("url")
             expected_title = entry.get("expected_title")
             webhook_expected_title = entry.get("webhook_expected_title")
+            master_account_expected_title = entry.get(
+                "master_account_expected_title"
+            )
             if not isinstance(url, str) or not url.strip():
                 raise SystemExit(
                     f"Manifest entry is missing a usable 'url': {entry!r}",
@@ -212,6 +243,14 @@ def load_manifest(path: Path) -> list[SchemaSource]:
                 raise SystemExit(
                     f"'webhook_expected_title' must be a string when provided: {entry!r}",
                 )
+            if (
+                master_account_expected_title is not None and
+                not isinstance(master_account_expected_title, str)
+            ):
+                raise SystemExit(
+                    "'master_account_expected_title' must be a string when "
+                    f"provided: {entry!r}",
+                )
             endpoint_source = SchemaSource(
                 url=url.strip(),
                 expected_title=expected_title.strip() if isinstance(expected_title, str) else None,
@@ -223,6 +262,11 @@ def load_manifest(path: Path) -> list[SchemaSource]:
                     webhook_expected_title=(
                         webhook_expected_title.strip()
                         if isinstance(webhook_expected_title, str)
+                        else None
+                    ),
+                    master_account_expected_title=(
+                        master_account_expected_title.strip()
+                        if isinstance(master_account_expected_title, str)
                         else None
                     ),
                 )
@@ -238,8 +282,9 @@ def load_manifest(path: Path) -> list[SchemaSource]:
 def expand_schema_sources(
     endpoint_source: SchemaSource,
     webhook_expected_title: str | None = None,
+    master_account_expected_title: str | None = None,
 ) -> list[SchemaSource]:
-    """Expand one endpoint source into endpoint and webhook downloads."""
+    """Expand one endpoint source into endpoint, webhook, and master downloads."""
 
     sources = [endpoint_source]
     if endpoint_source.url.endswith("/methods/endpoints.json"):
@@ -253,6 +298,21 @@ def expand_schema_sources(
                 expected_title=webhook_expected_title or endpoint_source.expected_title,
                 target_title=endpoint_source.target_title,
                 schema_kind="webhook",
+                optional=True,
+            )
+        )
+        master_account_url = endpoint_source.url.replace(
+            "/methods/endpoints.json",
+            "/ma/master.json",
+        )
+        sources.append(
+            SchemaSource(
+                url=master_account_url,
+                expected_title=(
+                    master_account_expected_title or endpoint_source.expected_title
+                ),
+                target_title=endpoint_source.target_title,
+                schema_kind="master_account",
                 optional=True,
             )
         )
@@ -382,23 +442,23 @@ def build_local_title_map(canonical_root: Path) -> dict[str, Path]:
     return title_map
 
 
-def build_webhook_target_map(
+def build_related_target_map(
     endpoint_root: Path,
-    webhook_root: Path,
+    related_root: Path,
 ) -> dict[str, Path]:
-    """Map schema titles to webhook target paths using endpoint relative paths.
+    """Map titles to related-schema paths using endpoint relative paths.
 
-    Webhook specs reuse endpoint titles such as `Meetings`, so we cannot target
-    them by title alone without colliding with the endpoint schema tree. Instead
-    we mirror the existing endpoint directory layout under a separate webhook
-    root and reuse the same relative path.
+    Webhook and master-account specs reuse endpoint titles such as `Meetings`,
+    so we cannot target them by title alone without colliding with the ordinary
+    endpoint tree. Instead we mirror the existing endpoint directory layout
+    under a separate root and reuse the same relative path.
     """
 
     target_map: dict[str, Path] = {}
     endpoint_title_map = build_local_title_map(endpoint_root)
     for title, endpoint_path in endpoint_title_map.items():
         relative_path = endpoint_path.relative_to(endpoint_root)
-        target_map[title] = webhook_root / relative_path
+        target_map[title] = related_root / relative_path
     return target_map
 
 
@@ -465,6 +525,7 @@ def mirror_tree(source_root: Path, target_root: Path, dry_run: bool) -> None:
 
 def update_from_downloads(
     canonical_root: Path,
+    master_account_root: Path,
     webhook_root: Path,
     cache_root: Path,
     downloaded_specs: list[DownloadedSchema],
@@ -473,13 +534,19 @@ def update_from_downloads(
     """Apply downloaded specs to known local schemas by title match."""
 
     endpoint_title_map = build_local_title_map(canonical_root)
-    webhook_title_map = build_webhook_target_map(canonical_root, webhook_root)
+    master_account_title_map = build_related_target_map(
+        canonical_root,
+        master_account_root,
+    )
+    webhook_title_map = build_related_target_map(canonical_root, webhook_root)
     updated = 0
     unmatched = 0
 
     for schema in downloaded_specs:
         if schema.schema_kind == "webhook":
             target = webhook_title_map.get(schema.title)
+        elif schema.schema_kind == "master_account":
+            target = master_account_title_map.get(schema.title)
         else:
             target = endpoint_title_map.get(schema.title)
         if target is None:
@@ -505,6 +572,8 @@ def main() -> int:
 
     canonical_root = args.canonical_root.resolve()
     test_root = args.test_root.resolve()
+    master_account_root = args.master_account_root.resolve()
+    test_master_account_root = args.test_master_account_root.resolve()
     webhook_root = args.webhook_root.resolve()
     test_webhook_root = args.test_webhook_root.resolve()
     cache_root = args.cache_root.resolve()
@@ -522,6 +591,7 @@ def main() -> int:
         print(f"downloaded {len(downloaded_specs)} OpenAPI-like JSON documents")
         updated, unmatched = update_from_downloads(
             canonical_root=canonical_root,
+            master_account_root=master_account_root,
             webhook_root=webhook_root,
             cache_root=cache_root,
             downloaded_specs=downloaded_specs,
@@ -530,6 +600,7 @@ def main() -> int:
 
     if not args.skip_mirror:
         mirror_tree(canonical_root, test_root, args.dry_run)
+        mirror_tree(master_account_root, test_master_account_root, args.dry_run)
         mirror_tree(webhook_root, test_webhook_root, args.dry_run)
 
     if failures:

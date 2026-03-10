@@ -52,7 +52,7 @@ class SchemaRegistry:
     """
 
     def __init__(self) -> None:
-        """Load bundled schema files and build the operation index."""
+        """Load bundled endpoint and master-account files into the index."""
 
         self._operations_by_prefix: dict[str, list[SchemaOperation]] = {}
         self._load_packaged_schemas()
@@ -232,37 +232,47 @@ class SchemaRegistry:
         return candidates
 
     def _load_packaged_schemas(self) -> None:
-        """Load every bundled schema JSON file into the registry."""
+        """Load every bundled path-based schema JSON file into the registry.
 
-        schema_root = resources.files("zoompy") / "schemas"
-        for schema_path in self._iter_schema_files(schema_root):
-            spec = json.loads(schema_path.read_text(encoding="utf-8"))
-            schema_name = str(spec.get("info", {}).get("title", schema_path.stem))
-            server_url = self._pick_server_url(spec)
+        The package now ships two path-based API families:
 
-            for path, path_item in spec.get("paths", {}).items():
-                if not isinstance(path_item, Mapping):
-                    continue
+        * ordinary endpoint docs under `zoompy/endpoints`
+        * master-account docs under `zoompy/master_accounts`
 
-                for method in ("get", "post", "put", "patch", "delete"):
-                    operation = path_item.get(method)
-                    if not isinstance(operation, Mapping):
+        Both use OpenAPI `paths`, so the runtime validator can index them with
+        exactly the same logic.
+        """
+
+        for root_name in ("endpoints", "master_accounts"):
+            schema_root = resources.files("zoompy") / root_name
+            for schema_path in self._iter_schema_files(schema_root):
+                spec = json.loads(schema_path.read_text(encoding="utf-8"))
+                schema_name = str(spec.get("info", {}).get("title", schema_path.stem))
+                server_url = self._pick_server_url(spec)
+
+                for path, path_item in spec.get("paths", {}).items():
+                    if not isinstance(path_item, Mapping):
                         continue
 
-                    compiled = re.compile(
-                        "^" + re.sub(r"\{[^/]+\}", r"[^/]+", path) + "$"
-                    )
-                    entry = SchemaOperation(
-                        schema_name=schema_name,
-                        method=method.upper(),
-                        template_path=path,
-                        path_regex=compiled,
-                        responses=operation.get("responses", {}),
-                        spec=spec,
-                        server_url=server_url,
-                    )
-                    prefix = self._path_prefix(path)
-                    self._operations_by_prefix.setdefault(prefix, []).append(entry)
+                    for method in ("get", "post", "put", "patch", "delete"):
+                        operation = path_item.get(method)
+                        if not isinstance(operation, Mapping):
+                            continue
+
+                        compiled = re.compile(
+                            "^" + re.sub(r"\{[^/]+\}", r"[^/]+", path) + "$"
+                        )
+                        entry = SchemaOperation(
+                            schema_name=schema_name,
+                            method=method.upper(),
+                            template_path=path,
+                            path_regex=compiled,
+                            responses=operation.get("responses", {}),
+                            spec=spec,
+                            server_url=server_url,
+                        )
+                        prefix = self._path_prefix(path)
+                        self._operations_by_prefix.setdefault(prefix, []).append(entry)
 
     def _iter_schema_files(self, root: Any) -> Iterable[Path]:
         """Recursively yield packaged JSON schema files.
