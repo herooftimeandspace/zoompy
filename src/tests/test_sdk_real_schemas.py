@@ -34,6 +34,11 @@ def test_real_schema_sdk_exposes_expected_top_level_namespaces() -> None:
         assert callable(client.users.list)
         assert callable(client.users.get)
         assert callable(client.phone.users.get)
+        assert callable(client.phone.users.update_profile)
+        assert callable(client.users.list.iter_pages)
+        assert callable(client.users.list.iter_all)
+        assert callable(client.users.list.paginate)
+        assert callable(client.users.get.raw)
     finally:
         client.close()
 
@@ -71,3 +76,18 @@ def test_real_schema_sdk_docstrings_include_operation_metadata() -> None:
     assert "Operation ID:" in docstring
     assert "HTTP:" in docstring
     assert "/phone/users/{userId}" in docstring
+
+
+def test_real_schema_sdk_common_method_names_are_stable() -> None:
+    """Pin a few important public method names as a golden SDK contract."""
+
+    client = _build_client()
+    try:
+        assert client.users.list._operation.operation_id == "users"
+        assert client.users.get._operation.operation_id == "user"
+        assert client.phone.users.get._operation.operation_id == "phoneUser"
+        assert client.phone.users.update_profile._operation.operation_id == (
+            "updateUserProfile"
+        )
+    finally:
+        client.close()

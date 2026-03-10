@@ -52,3 +52,17 @@ tests in addition to keeping the broad contract suites green.
 - keep docstrings and comments updated with behavior changes
 - prefer small, reviewable commits
 - do not add dependencies unless there is a clear justification
+
+## SDK stability policy
+
+`zoompy` now has a public SDK surface on top of the lower-level request client.
+When contributing, treat these SDK behaviors as user-facing API:
+
+- namespace layout such as `client.users` and `client.phone.users`
+- snake_case method parameters derived from schema parameters
+- normal typed return behavior for SDK calls
+- `.raw(...)`
+- pagination helpers like `iter_pages(...)`, `iter_all(...)`, and `paginate(...)`
+
+If you need to rename or remove a public SDK method, document the change in
+[CHANGELOG.md](./CHANGELOG.md) and treat it as a breaking change.

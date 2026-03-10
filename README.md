@@ -60,6 +60,31 @@ Those SDK calls still delegate to the same validated `request()` method
 internally. In other words, the ergonomic layer is additive; it does not
 replace the low-level client.
 
+### SDK stability
+
+The public SDK surface is intended to be stable for outside consumers.
+
+Stable SDK behaviors:
+
+- namespace access such as `client.users`, `client.phone.users`,
+  `client.meetings`
+- snake_case parameter names derived from the schema
+- typed model returns for normal SDK calls when a representative response model
+  exists
+- `.raw(...)` for plain validated JSON
+- pagination helpers:
+  - `iter_pages(...)`
+  - `iter_all(...)`
+  - `paginate(...)`
+
+Compatibility policy:
+
+- additive namespaces and methods are allowed in minor releases
+- renaming or removing an existing public SDK method is a breaking change
+- schema syncs may add new methods as Zoom expands the API surface
+- breaking SDK changes should be called out explicitly in
+  [CHANGELOG.md](./CHANGELOG.md)
+
 ### Token caching and Server-to-Server OAuth
 
 When you do not provide an explicit `access_token`, `zoompy` performs the Zoom
@@ -267,13 +292,16 @@ from zoompy import ZoomClient
 with ZoomClient() as client:
     users = client.users.list(page_size=10)
     user = client.users.get(user_id="me")
-    phone_user = client.phone.user.get(id="1234")
+    phone_user = client.phone.users.get(user_id="abc123")
+    updated = client.phone.users.update_profile(
+        user_id="abc123",
+        display_name="Ada Lovelace",
+    )
 ```
 
 Generated SDK methods support a few conventions:
 
 - path parameters accept snake_case names like `user_id`
-- a generic `id=` alias works when a method has exactly one path parameter
 - known query parameters remain query parameters
 - leftover keyword arguments become JSON body fields for body-capable methods
 - unusual operations are still available through snake-cased `operationId`
@@ -312,6 +340,23 @@ The older low-level model hooks still exist for advanced use:
 They are no longer the primary interface. They mainly exist as escape hatches
 for advanced callers and internal testing. If you want plain validated JSON
 instead of model objects, use `.raw(...)`.
+
+### Pagination helpers
+
+Most Zoom list endpoints use `next_page_token`. The SDK exposes that directly:
+
+```python
+from zoompy import ZoomClient
+
+with ZoomClient() as client:
+    for page in client.users.list.paginate(page_size=100):
+        print(page.next_page_token, page.total_records)
+        for user in page.items:
+            print(user.user_id)
+
+    for user in client.users.list.iter_all(page_size=100):
+        print(user.user_id)
+```
 
 ### Context manager
 

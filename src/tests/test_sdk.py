@@ -227,6 +227,49 @@ def _build_sdk_client(tmp_path: Path) -> ZoomClient:
                                 }
                             }
                         },
+                    },
+                    "patch": {
+                        "operationId": "updateUserProfile",
+                        "summary": "Update phone user profile",
+                        "parameters": [
+                            {
+                                "name": "userId",
+                                "in": "path",
+                                "required": True,
+                                "schema": {"type": "string"},
+                            }
+                        ],
+                        "requestBody": {
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "displayName": {"type": "string"},
+                                        },
+                                        "required": ["displayName"],
+                                    }
+                                }
+                            }
+                        },
+                        "responses": {
+                            "200": {
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "userId": {"type": "string"},
+                                                "displayName": {
+                                                    "type": "string"
+                                                },
+                                            },
+                                            "required": ["userId"],
+                                        }
+                                    }
+                                }
+                            }
+                        },
                     }
                 },
             },
@@ -249,6 +292,7 @@ def test_zoom_client_exposes_generated_service_namespaces(tmp_path: Path) -> Non
         assert callable(client.users.create)
         assert callable(client.phone.users.get)
         assert callable(client.phone.user.get)
+        assert callable(client.phone.users.update_profile)
     finally:
         client.close()
 
@@ -536,7 +580,7 @@ def test_sdk_supports_singular_namespace_and_generic_id_alias(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Allow `phone.user.get(id=...)` as a friendlier scripting shorthand."""
+    """Allow singular namespace aliases while keeping schema-native params."""
 
     client = _build_sdk_client(tmp_path)
     recorded: dict[str, Any] = {}
@@ -557,7 +601,7 @@ def test_sdk_supports_singular_namespace_and_generic_id_alias(
     monkeypatch.setattr(client, "request", fake_request)
 
     try:
-        result = client.phone.user.get(id="1234")
+        result = client.phone.user.get(user_id="1234")
     finally:
         client.close()
 
@@ -565,3 +609,197 @@ def test_sdk_supports_singular_namespace_and_generic_id_alias(
     typed_result = cast(Any, result)
     assert typed_result.user_id == "1234"
     assert recorded["path_params"] == {"userId": "1234"}
+
+
+def test_sdk_semantic_aliases_expose_cleaner_operation_names(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Derive useful snake-cased aliases from complex operation ids."""
+
+    client = _build_sdk_client(tmp_path)
+    recorded: dict[str, Any] = {}
+
+    def fake_request(
+        method: str,
+        path: str,
+        *,
+        path_params: Any = None,
+        params: Any = None,
+        json: Any = None,
+        headers: Any = None,
+        timeout: Any = None,
+    ) -> dict[str, Any]:
+        recorded.update(
+            {
+                "method": method,
+                "path": path,
+                "path_params": path_params,
+                "json": json,
+            }
+        )
+        return {"userId": path_params["userId"], "displayName": json["displayName"]}
+
+    monkeypatch.setattr(client, "request", fake_request)
+
+    try:
+        result = client.phone.users.update_profile(
+            user_id="1234",
+            display_name="Ada Lovelace",
+        )
+    finally:
+        client.close()
+
+    assert isinstance(result, BaseModel)
+    typed_result = cast(Any, result)
+    assert typed_result.display_name == "Ada Lovelace"
+    assert recorded == {
+        "method": "PATCH",
+        "path": "/phone/users/{userId}",
+        "path_params": {"userId": "1234"},
+        "json": {"displayName": "Ada Lovelace"},
+    }
+
+
+def test_sdk_iter_pages_follows_next_page_tokens(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Walk paginated list endpoints one typed page at a time."""
+
+    client = _build_sdk_client(tmp_path)
+    calls: list[dict[str, Any]] = []
+    responses = [
+        {
+            "users": [{"userId": "u1"}],
+            "next_page_token": "token-2",
+        },
+        {
+            "users": [{"userId": "u2"}],
+            "next_page_token": "",
+        },
+    ]
+
+    def fake_request(
+        method: str,
+        path: str,
+        *,
+        path_params: Any = None,
+        params: Any = None,
+        json: Any = None,
+        headers: Any = None,
+        timeout: Any = None,
+    ) -> dict[str, Any]:
+        calls.append({"method": method, "path": path, "params": params})
+        return responses[len(calls) - 1]
+
+    monkeypatch.setattr(client, "request", fake_request)
+
+    try:
+        pages = list(client.users.list.iter_pages(page_size=1))
+    finally:
+        client.close()
+
+    assert len(pages) == 2
+    assert calls == [
+        {"method": "GET", "path": "/users", "params": {"page_size": 1}},
+        {
+            "method": "GET",
+            "path": "/users",
+            "params": {"page_size": 1, "next_page_token": "token-2"},
+        },
+    ]
+
+
+def test_sdk_iter_all_yields_collection_items_across_pages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Flatten paginated collection responses into one item stream."""
+
+    client = _build_sdk_client(tmp_path)
+    responses = [
+        {
+            "users": [{"userId": "u1"}, {"userId": "u2"}],
+            "next_page_token": "token-2",
+        },
+        {
+            "users": [{"userId": "u3"}],
+            "next_page_token": "",
+        },
+    ]
+    call_count = 0
+
+    def fake_request(
+        method: str,
+        path: str,
+        *,
+        path_params: Any = None,
+        params: Any = None,
+        json: Any = None,
+        headers: Any = None,
+        timeout: Any = None,
+    ) -> dict[str, Any]:
+        nonlocal call_count
+        call_count += 1
+        return responses[call_count - 1]
+
+    monkeypatch.setattr(client, "request", fake_request)
+
+    try:
+        items = list(client.users.list.iter_all(page_size=2))
+    finally:
+        client.close()
+
+    assert [cast(Any, item).user_id for item in items] == ["u1", "u2", "u3"]
+
+
+def test_sdk_paginate_exposes_page_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Expose pagination metadata without forcing callers to parse raw pages."""
+
+    client = _build_sdk_client(tmp_path)
+    responses = [
+        {
+            "users": [{"userId": "u1"}],
+            "next_page_token": "token-2",
+            "page_size": 1,
+            "total_records": 2,
+        },
+        {
+            "users": [{"userId": "u2"}],
+            "next_page_token": "",
+            "page_size": 1,
+            "total_records": 2,
+        },
+    ]
+    call_count = 0
+
+    def fake_request(
+        method: str,
+        path: str,
+        *,
+        path_params: Any = None,
+        params: Any = None,
+        json: Any = None,
+        headers: Any = None,
+        timeout: Any = None,
+    ) -> dict[str, Any]:
+        nonlocal call_count
+        call_count += 1
+        return responses[call_count - 1]
+
+    monkeypatch.setattr(client, "request", fake_request)
+
+    try:
+        pages = list(client.users.list.paginate(page_size=1))
+    finally:
+        client.close()
+
+    assert len(pages) == 2
+    assert [cast(Any, item).user_id for item in pages[0].items] == ["u1"]
+    assert pages[0].next_page_token == "token-2"
+    assert pages[0].page_size == 1
+    assert pages[0].total_records == 2

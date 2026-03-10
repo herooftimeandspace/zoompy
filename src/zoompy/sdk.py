@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import keyword
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from types import GenericAlias
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -36,6 +36,15 @@ if TYPE_CHECKING:
 
 
 _MISSING = object()
+_PAGINATION_FIELD_NAMES = {
+    "next_page_token",
+    "nextPageToken",
+    "page_count",
+    "page_number",
+    "page_size",
+    "total_records",
+    "total_pages",
+}
 
 
 @dataclass(frozen=True)
@@ -75,6 +84,7 @@ class SdkOperation:
     operation_id: str
     request_schema: Mapping[str, Any] | None
     response_schema: Mapping[str, Any] | None
+    semantic_aliases: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -83,6 +93,25 @@ class SdkModels:
 
     request_model: type[BaseModel] | None
     response_model: type[BaseModel] | None
+
+
+@dataclass(frozen=True)
+class SdkPage:
+    """One paginated SDK result with both items and metadata.
+
+    Zoom list responses usually combine the actual collection with pagination
+    metadata such as `next_page_token`, `page_size`, and `total_records`.
+    Returning a small page object keeps that information available to callers
+    without forcing them to inspect the raw response body manually.
+    """
+
+    value: BaseModel | dict[str, Any] | list[Any] | None
+    items: tuple[Any, ...]
+    next_page_token: str | None
+    page_size: int | None
+    page_number: int | None
+    total_records: int | None
+    total_pages: int | None
 
 
 class ModelFactory:
@@ -446,6 +475,59 @@ class SdkMethod:
             timeout=timeout,
         )
 
+    def iter_pages(
+        self,
+        **kwargs: Any,
+    ) -> Iterator[BaseModel | dict[str, Any] | list[Any] | None]:
+        """Iterate through paginated list responses one page at a time.
+
+        Zoom commonly paginates list endpoints with `next_page_token`. This
+        helper keeps the pagination loop close to the SDK method so script code
+        stays small and readable.
+        """
+
+        page_kwargs = dict(kwargs)
+        while True:
+            page = self(**page_kwargs)
+            yield page
+
+            next_page_token = self._next_page_token(page)
+            if not next_page_token:
+                break
+            page_kwargs["next_page_token"] = next_page_token
+
+    def paginate(self, **kwargs: Any) -> Iterator[SdkPage]:
+        """Iterate through pages while exposing pagination metadata directly."""
+
+        for page in self.iter_pages(**kwargs):
+            payload = self._coerce_page_mapping(page)
+            yield SdkPage(
+                value=page,
+                items=tuple(self._collection_items(page)),
+                next_page_token=self._next_page_token(page),
+                page_size=self._int_field(payload, "page_size", "pageSize"),
+                page_number=self._int_field(payload, "page_number", "pageNumber"),
+                total_records=self._int_field(
+                    payload,
+                    "total_records",
+                    "totalRecords",
+                ),
+                total_pages=self._int_field(payload, "total_pages", "totalPages"),
+            )
+
+    def iter_all(self, **kwargs: Any) -> Iterator[Any]:
+        """Iterate through items across all pages of a paginated list call.
+
+        This helper is intentionally best-effort and geared toward the common
+        Zoom response shape of:
+
+        * one collection field such as `users` or `meetings`
+        * pagination metadata such as `next_page_token`
+        """
+
+        for page in self.paginate(**kwargs):
+            yield from page.items
+
     @property
     def request_model(self) -> type[BaseModel] | None:
         """Return the generated request-body model for this SDK method.
@@ -501,6 +583,127 @@ class SdkMethod:
                 self._operation
             )
         return self._models
+
+    def _next_page_token(
+        self,
+        page: BaseModel | dict[str, Any] | list[Any] | None,
+    ) -> str | None:
+        """Extract the next-page token from one page result, if present."""
+
+        payload = self._coerce_page_mapping(page)
+        if payload is None:
+            return None
+
+        for key in ("next_page_token", "nextPageToken"):
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                return value
+        return None
+
+    def _collection_items(
+        self,
+        page: BaseModel | dict[str, Any] | list[Any] | None,
+    ) -> Iterable[Any]:
+        """Return the primary collection from one paginated response page."""
+
+        if isinstance(page, list):
+            return page
+
+        if isinstance(page, BaseModel):
+            candidate = self._preferred_collection_from_model(page)
+            if candidate is not None:
+                return candidate
+            return []
+
+        if isinstance(page, Mapping):
+            candidate = self._preferred_collection_from_mapping(page)
+            if candidate is not None:
+                return candidate
+            return []
+
+        return []
+
+    def _preferred_collection_from_model(
+        self,
+        model: BaseModel,
+    ) -> list[Any] | None:
+        """Select the most likely collection field from a typed page model."""
+
+        namespace_hint = self._operation.namespace[-1] if self._operation.namespace else None
+        for field_name in self._collection_field_candidates(namespace_hint):
+            value = getattr(model, field_name, None)
+            if isinstance(value, list):
+                return value
+
+        for field_name in model.model_fields:
+            if field_name in _PAGINATION_FIELD_NAMES:
+                continue
+            value = getattr(model, field_name, None)
+            if isinstance(value, list):
+                return value
+        return None
+
+    def _preferred_collection_from_mapping(
+        self,
+        payload: Mapping[str, Any],
+    ) -> list[Any] | None:
+        """Select the most likely collection field from a raw response page."""
+
+        namespace_hint = self._operation.namespace[-1] if self._operation.namespace else None
+        for field_name in self._collection_field_candidates(namespace_hint):
+            value = payload.get(field_name)
+            if isinstance(value, list):
+                return value
+
+        for key, value in payload.items():
+            if key in _PAGINATION_FIELD_NAMES:
+                continue
+            if isinstance(value, list):
+                return value
+        return None
+
+    def _collection_field_candidates(self, namespace_hint: str | None) -> tuple[str, ...]:
+        """Build likely collection-field names from the namespace path."""
+
+        if not namespace_hint:
+            return ()
+
+        candidates = [namespace_hint]
+        if namespace_hint.endswith("s") and len(namespace_hint) > 1:
+            candidates.append(namespace_hint[:-1])
+        else:
+            candidates.append(f"{namespace_hint}s")
+        return tuple(dict.fromkeys(candidates))
+
+    def _coerce_page_mapping(
+        self,
+        page: BaseModel | dict[str, Any] | list[Any] | None,
+    ) -> Mapping[str, Any] | None:
+        """Normalize a page result into a mapping for metadata inspection."""
+
+        if isinstance(page, BaseModel):
+            dumped = page.model_dump(by_alias=True, exclude_none=True)
+            if isinstance(dumped, Mapping):
+                return dumped
+            return None
+        if isinstance(page, Mapping):
+            return page
+        return None
+
+    def _int_field(
+        self,
+        payload: Mapping[str, Any] | None,
+        *keys: str,
+    ) -> int | None:
+        """Return the first integer metadata field present in a page mapping."""
+
+        if payload is None:
+            return None
+        for key in keys:
+            value = payload.get(key)
+            if isinstance(value, int):
+                return value
+        return None
 
     def _consume_path_parameters(
         self,
@@ -763,10 +966,17 @@ class ZoomSdk:
 
         alias_counts: dict[tuple[tuple[str, ...], str], int] = {}
         for operation in operations:
-            if operation.alias_name is None:
-                continue
-            key = (operation.namespace, operation.alias_name)
-            alias_counts[key] = alias_counts.get(key, 0) + 1
+            alias_names = [
+                name
+                for name in (
+                    operation.alias_name,
+                    *operation.semantic_aliases,
+                )
+                if name is not None
+            ]
+            for alias_name in alias_names:
+                key = (operation.namespace, alias_name)
+                alias_counts[key] = alias_counts.get(key, 0) + 1
 
         for operation in operations:
             node = self._ensure_namespace(operation.namespace)
@@ -776,21 +986,24 @@ class ZoomSdk:
             )
 
         for operation in operations:
-            if operation.alias_name is None:
-                continue
-
-            key = (operation.namespace, operation.alias_name)
-            if alias_counts.get(key) != 1:
-                continue
-
             node = self._ensure_namespace(operation.namespace)
-            if node.has_member(operation.alias_name):
-                continue
-
-            node.add_method(
-                operation.alias_name,
-                SdkMethod(client=self._client, operation=operation),
-            )
+            for alias_name in [
+                name
+                for name in (
+                    operation.alias_name,
+                    *operation.semantic_aliases,
+                )
+                if name is not None
+            ]:
+                key = (operation.namespace, alias_name)
+                if alias_counts.get(key) != 1:
+                    continue
+                if node.has_member(alias_name):
+                    continue
+                node.add_method(
+                    alias_name,
+                    SdkMethod(client=self._client, operation=operation),
+                )
 
         self._build_singular_aliases(self._root)
 
@@ -824,6 +1037,14 @@ class ZoomSdk:
             operation_id=operation.operation_id,
             request_schema=self._registry.request_body_schema(operation),
             response_schema=self._registry.response_schema(operation),
+            semantic_aliases=_semantic_aliases(
+                namespace=namespace,
+                operation_id=operation.operation_id,
+                primary_alias=_heuristic_alias(
+                    method=operation.method,
+                    path=operation.template_path,
+                ),
+            ),
         )
 
     def _build_singular_aliases(self, node: ServiceNode) -> None:
@@ -915,6 +1136,48 @@ def _heuristic_alias(*, method: str, path: str) -> str | None:
     if method == "DELETE":
         return "delete"
     return None
+
+
+def _semantic_aliases(
+    *,
+    namespace: tuple[str, ...],
+    operation_id: str,
+    primary_alias: str | None,
+) -> tuple[str, ...]:
+    """Derive extra snake-cased method aliases from one operation id.
+
+    The goal is not to invent a large uncontrolled alias system. The goal is
+    to make verbose operation ids from complex Zoom families feel more natural
+    when the cleaned-up name is still clearly grounded in the schema.
+
+    Example:
+    - namespace: `("phone", "users")`
+    - operation id: `updateUserProfile`
+    - semantic alias: `update_profile`
+    """
+
+    operation_name = _identifier(operation_id)
+    parts = [part for part in operation_name.split("_") if part]
+    if not parts:
+        return ()
+
+    namespace_tokens: set[str] = set()
+    for segment in namespace:
+        namespace_tokens.add(segment)
+        if segment.endswith("s") and len(segment) > 1:
+            namespace_tokens.add(segment[:-1])
+        else:
+            namespace_tokens.add(f"{segment}s")
+
+    reduced_parts = [part for part in parts if part not in namespace_tokens]
+    candidates: list[str] = []
+
+    if reduced_parts:
+        reduced_name = "_".join(reduced_parts)
+        if reduced_name not in {operation_name, primary_alias}:
+            candidates.append(reduced_name)
+
+    return tuple(dict.fromkeys(candidates))
 
 
 def _identifier(value: str) -> str:
