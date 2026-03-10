@@ -88,6 +88,22 @@ class SdkOperation:
     response_schema: Mapping[str, Any] | None
     semantic_aliases: tuple[str, ...]
 
+    @property
+    def alias_names(self) -> tuple[str, ...]:
+        """Return all candidate public aliases for this operation.
+
+        The SDK keeps both a simple CRUD-style alias and a few cleaned semantic
+        aliases derived from the OpenAPI `operationId`. Centralizing that list
+        here keeps tree-building logic from repeating the same filtering rules
+        in multiple places.
+        """
+
+        return tuple(
+            name
+            for name in (self.alias_name, *self.semantic_aliases)
+            if name is not None
+        )
+
 
 @dataclass(frozen=True)
 class SdkModels:
@@ -375,12 +391,17 @@ class SdkMethod:
     lives in `ZoomClient.request()`.
     """
 
-    def __init__(self, client: ZoomClient, operation: SdkOperation) -> None:
+    def __init__(
+        self,
+        client: ZoomClient,
+        operation: SdkOperation,
+        model_factory: ModelFactory,
+    ) -> None:
         """Store the target client and normalized operation metadata."""
 
         self._client = client
         self._operation = operation
-        self._model_factory = ModelFactory()
+        self._model_factory = model_factory
         self._models: SdkModels | None = None
         self.__doc__ = self._build_docstring()
 
@@ -610,55 +631,49 @@ class SdkMethod:
         if isinstance(page, list):
             return page
 
-        if isinstance(page, BaseModel):
-            candidate = self._preferred_collection_from_model(page)
-            if candidate is not None:
-                return candidate
-            return []
-
-        if isinstance(page, Mapping):
-            candidate = self._preferred_collection_from_mapping(page)
-            if candidate is not None:
-                return candidate
-            return []
+        candidate = self._preferred_collection(page)
+        if candidate is not None:
+            return candidate
 
         return []
 
-    def _preferred_collection_from_model(
+    def _preferred_collection(
         self,
-        model: BaseModel,
+        page: BaseModel | Mapping[str, Any],
     ) -> list[Any] | None:
-        """Select the most likely collection field from a typed page model."""
+        """Select the most likely collection field from a page-like object.
 
-        namespace_hint = self._operation.namespace[-1] if self._operation.namespace else None
+        Pagination helpers need the same best-effort collection lookup whether
+        the SDK returned a typed model or raw JSON. This helper normalizes both
+        shapes into one field-scanning path so the selection rules stay in one
+        place.
+        """
+
+        namespace_hint = (
+            self._operation.namespace[-1] if self._operation.namespace else None
+        )
+        field_names: Iterable[str]
+
+        if isinstance(page, BaseModel):
+            field_names = type(page).model_fields
+
+            def value_for(field_name: str) -> Any:
+                return getattr(page, field_name, None)
+        else:
+            field_names = page.keys()
+
+            def value_for(field_name: str) -> Any:
+                return page.get(field_name)
+
         for field_name in self._collection_field_candidates(namespace_hint):
-            value = getattr(model, field_name, None)
+            value = value_for(field_name)
             if isinstance(value, list):
                 return value
 
-        for field_name in model.model_fields:
+        for field_name in field_names:
             if field_name in _PAGINATION_FIELD_NAMES:
                 continue
-            value = getattr(model, field_name, None)
-            if isinstance(value, list):
-                return value
-        return None
-
-    def _preferred_collection_from_mapping(
-        self,
-        payload: Mapping[str, Any],
-    ) -> list[Any] | None:
-        """Select the most likely collection field from a raw response page."""
-
-        namespace_hint = self._operation.namespace[-1] if self._operation.namespace else None
-        for field_name in self._collection_field_candidates(namespace_hint):
-            value = payload.get(field_name)
-            if isinstance(value, list):
-                return value
-
-        for key, value in payload.items():
-            if key in _PAGINATION_FIELD_NAMES:
-                continue
+            value = value_for(field_name)
             if isinstance(value, list):
                 return value
         return None
@@ -919,6 +934,7 @@ class ZoomSdk:
 
         self._client = client
         self._registry = schema_registry
+        self._model_factory = ModelFactory()
         self._root = ServiceNode(name="root", client=client)
         self._build_tree()
 
@@ -959,15 +975,7 @@ class ZoomSdk:
 
         alias_counts: dict[tuple[tuple[str, ...], str], int] = {}
         for operation in operations:
-            alias_names = [
-                name
-                for name in (
-                    operation.alias_name,
-                    *operation.semantic_aliases,
-                )
-                if name is not None
-            ]
-            for alias_name in alias_names:
+            for alias_name in operation.alias_names:
                 key = (operation.namespace, alias_name)
                 alias_counts[key] = alias_counts.get(key, 0) + 1
 
@@ -975,19 +983,16 @@ class ZoomSdk:
             node = self._ensure_namespace(operation.namespace)
             node.add_method(
                 operation.operation_name,
-                SdkMethod(client=self._client, operation=operation),
+                SdkMethod(
+                    client=self._client,
+                    operation=operation,
+                    model_factory=self._model_factory,
+                ),
             )
 
         for operation in operations:
             node = self._ensure_namespace(operation.namespace)
-            for alias_name in [
-                name
-                for name in (
-                    operation.alias_name,
-                    *operation.semantic_aliases,
-                )
-                if name is not None
-            ]:
+            for alias_name in operation.alias_names:
                 key = (operation.namespace, alias_name)
                 if alias_counts.get(key) != 1:
                     continue
@@ -995,7 +1000,11 @@ class ZoomSdk:
                     continue
                 node.add_method(
                     alias_name,
-                    SdkMethod(client=self._client, operation=operation),
+                    SdkMethod(
+                        client=self._client,
+                        operation=operation,
+                        model_factory=self._model_factory,
+                    ),
                 )
 
         self._build_singular_aliases(self._root)
