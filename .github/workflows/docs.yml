@@ -5,7 +5,12 @@ on:
     workflows: ["CI"]
     types:
       - completed
+    branches:
+      - main
   workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 permissions:
   contents: read
@@ -63,7 +68,15 @@ jobs:
 
   deploy-docs:
     needs: build-docs
-    if: needs.build-docs.result == 'success'
+    if: |
+      needs.build-docs.result == 'success' &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'workflow_run' &&
+          github.event.workflow_run.head_branch == 'main'
+        )
+      )
     runs-on: ubuntu-latest
     environment:
       name: github-pages
