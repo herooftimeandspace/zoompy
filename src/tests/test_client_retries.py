@@ -104,7 +104,13 @@ class _RaisingSchemaRegistry(_NoOpSchemaRegistry):
 
 
 def _build_client() -> ZoomClient:
-    """Create a client configured for isolated retry tests."""
+    """Create a client configured for isolated retry tests.
+
+    Most tests in this module care about one narrow runtime branch rather than
+    the full client constructor surface. Centralizing the default setup here
+    keeps those tests focused on the behavior under inspection while still
+    allowing targeted overrides for schema or webhook registries.
+    """
 
     return ZoomClient(
         access_token="test-access-token",
@@ -114,6 +120,40 @@ def _build_client() -> ZoomClient:
         backoff_max_seconds=8.0,
         schema_registry=_NoOpSchemaRegistry(),  # type: ignore[arg-type]
     )
+
+
+def _build_custom_client(**overrides: Any) -> ZoomClient:
+    """Build a retry-test client with one or two focused constructor overrides."""
+
+    config: dict[str, Any] = {
+        "access_token": "test-access-token",
+        "base_url": "https://api.zoom.example",
+    }
+    config.update(overrides)
+    return ZoomClient(**config)
+
+
+def _capture_log_events(
+    monkeypatch: pytest.MonkeyPatch,
+    client: ZoomClient,
+    *,
+    method_name: str = "error",
+) -> list[dict[str, Any]]:
+    """Capture one structured logger method as a list of emitted event dicts.
+
+    Several retry-path tests assert on the structured logging side effects, and
+    repeating the same monkeypatch lambda everywhere made the module harder to
+    scan. This helper keeps the capture logic in one place without hiding what
+    each test actually cares about.
+    """
+
+    events: list[dict[str, Any]] = []
+
+    def capture(message: str, *, extra: dict[str, Any]) -> None:
+        events.append({"message": message, **extra})
+
+    monkeypatch.setattr(client._logger, method_name, capture)
+    return events
 
 
 def test_request_retries_transport_errors_once_before_success(
@@ -259,7 +299,7 @@ def test_request_logs_final_transport_failure_after_retries_exhaust(
     """Log the last transport exception when retry attempts run out."""
 
     client = _build_client()
-    errors: list[dict[str, Any]] = []
+    errors = _capture_log_events(monkeypatch, client)
     request = httpx.Request("GET", "https://api.zoom.example/transport-failure")
     sleeps: list[float] = []
     attempts = 0
@@ -283,11 +323,6 @@ def test_request_logs_final_transport_failure_after_retries_exhaust(
 
     monkeypatch.setattr(time, "sleep", fake_sleep)
     monkeypatch.setattr(client._http, "request", fake_request)
-    monkeypatch.setattr(
-        client._logger,
-        "error",
-        lambda message, *, extra: errors.append({"message": message, **extra}),
-    )
 
     try:
         with pytest.raises(httpx.ConnectError):
@@ -332,7 +367,7 @@ def test_client_context_manager_and_token_delegation(
 def test_getattr_exposes_sdk_members_and_rejects_unknown_names() -> None:
     """Expose SDK namespaces through `__getattr__` and reject missing ones."""
 
-    client = ZoomClient(access_token="test-access-token")
+    client = _build_custom_client()
 
     try:
         assert client.users is client.sdk.get_member("users")
@@ -396,9 +431,7 @@ def test_retry_delay_uses_backoff_when_retry_after_is_invalid(
 def test_request_runtime_fallback_raises_when_retry_loop_never_runs() -> None:
     """Keep the explicit impossible-state guard covered for type-checker clarity."""
 
-    client = ZoomClient(
-        access_token="test-access-token",
-        base_url="https://api.zoom.example",
+    client = _build_custom_client(
         max_retries=-1,
         schema_registry=_NoOpSchemaRegistry(),  # type: ignore[arg-type]
     )
@@ -419,11 +452,7 @@ def test_request_returns_none_for_204_and_validates_empty_payload(
     """Treat `204 No Content` as a successful `None` response."""
 
     registry = _RecordingSchemaRegistry()
-    client = ZoomClient(
-        access_token="test-access-token",
-        base_url="https://api.zoom.example",
-        schema_registry=registry,  # type: ignore[arg-type]
-    )
+    client = _build_custom_client(schema_registry=registry)  # type: ignore[arg-type]
     url = "https://api.zoom.example/no-content"
     respx_mock.get(url).mock(
         return_value=httpx.Response(
@@ -456,7 +485,7 @@ def test_request_rejects_invalid_json_response_bodies(
     """Raise `ValueError` when a successful response body is not valid JSON."""
 
     client = _build_client()
-    errors: list[dict[str, Any]] = []
+    errors = _capture_log_events(monkeypatch, client)
     url = "https://api.zoom.example/not-json"
     request = httpx.Request("GET", url)
     respx_mock.get(url).mock(
@@ -467,12 +496,6 @@ def test_request_rejects_invalid_json_response_bodies(
             request=request,
         )
     )
-    monkeypatch.setattr(
-        client._logger,
-        "error",
-        lambda message, *, extra: errors.append({"message": message, **extra}),
-    )
-
     try:
         with pytest.raises(ValueError, match="Expected JSON response"):
             client.request("GET", "/not-json")
@@ -488,12 +511,10 @@ def test_request_logs_schema_validation_failures(
 ) -> None:
     """Log and re-raise response schema mismatches from the registry."""
 
-    client = ZoomClient(
-        access_token="test-access-token",
-        base_url="https://api.zoom.example",
+    client = _build_custom_client(
         schema_registry=_RaisingSchemaRegistry(),  # type: ignore[arg-type]
     )
-    errors: list[dict[str, Any]] = []
+    errors = _capture_log_events(monkeypatch, client)
     url = "https://api.zoom.example/schema-error"
     request = httpx.Request("GET", url)
     respx_mock.get(url).mock(
@@ -503,12 +524,6 @@ def test_request_logs_schema_validation_failures(
             request=request,
         )
     )
-    monkeypatch.setattr(
-        client._logger,
-        "error",
-        lambda message, *, extra: errors.append({"message": message, **extra}),
-    )
-
     try:
         with pytest.raises(ValueError, match="schema mismatch"):
             client.request("GET", "/schema-error")
@@ -580,16 +595,10 @@ def test_validate_webhook_logs_runtime_validation_errors(
 ) -> None:
     """Surface webhook validation failures with a structured log entry."""
 
-    client = ZoomClient(
-        access_token="test-access-token",
+    client = _build_custom_client(
         webhook_registry=_RaisingWebhookRegistry(),  # type: ignore[arg-type]
     )
-    errors: list[dict[str, Any]] = []
-    monkeypatch.setattr(
-        client._logger,
-        "error",
-        lambda message, *, extra: errors.append({"message": message, **extra}),
-    )
+    errors = _capture_log_events(monkeypatch, client)
 
     try:
         with pytest.raises(ValueError, match="bad webhook payload"):

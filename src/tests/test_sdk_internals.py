@@ -78,6 +78,20 @@ def _sdk_operation(
     )
 
 
+def _sdk_method(
+    *,
+    operation: SdkOperation | None = None,
+    model_factory: ModelFactory | None = None,
+) -> SdkMethod:
+    """Create one lightweight `SdkMethod` for narrow internal helper checks."""
+
+    return SdkMethod(
+        client=_FakeClient(),  # type: ignore[arg-type]
+        operation=operation or _sdk_operation(),
+        model_factory=model_factory or ModelFactory(),
+    )
+
+
 def test_model_factory_caches_models_and_supports_additional_properties() -> None:
     """Cover cache reuse, `additionalProperties`, and `extra=forbid` branches."""
 
@@ -232,11 +246,7 @@ def test_model_factory_merge_all_of_ignores_invalid_branch_shapes() -> None:
 def test_sdk_method_pagination_helpers_cover_mapping_and_none_fallbacks() -> None:
     """Exercise the remaining best-effort pagination helper branches."""
 
-    method = SdkMethod(
-        client=_FakeClient(),  # type: ignore[arg-type]
-        operation=_sdk_operation(),
-        model_factory=ModelFactory(),
-    )
+    method = _sdk_method()
 
     assert method._next_page_token(["not-a-mapping"]) is None
     assert list(method._collection_items([1, 2])) == [1, 2]
@@ -253,8 +263,7 @@ def test_sdk_method_pagination_helpers_cover_mapping_and_none_fallbacks() -> Non
 def test_sdk_method_path_and_query_helpers_cover_original_names_and_body_fallbacks() -> None:
     """Use schema-native names and split leftover kwargs into query/body buckets."""
 
-    method = SdkMethod(
-        client=_FakeClient(),  # type: ignore[arg-type]
+    method = _sdk_method(
         operation=_sdk_operation(
             path_parameters=(
                 SdkParameter(
@@ -282,7 +291,6 @@ def test_sdk_method_path_and_query_helpers_cover_original_names_and_body_fallbac
                 "properties": {"name": {"type": "string"}},
             },
         ),
-        model_factory=ModelFactory(),
     )
 
     remaining = {"userId": "abc123"}
@@ -330,11 +338,7 @@ def test_sdk_method_uses_root_request_model_and_tooling_name_fallbacks() -> None
         ),
         response_schema={"type": "integer"},
     )
-    method = SdkMethod(
-        client=_FakeClient(),  # type: ignore[arg-type]
-        operation=operation,
-        model_factory=ModelFactory(),
-    )
+    method = _sdk_method(operation=operation)
     method._models = SdkModels(
         request_model=request_model,
         response_model=None,
