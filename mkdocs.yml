@@ -1,0 +1,61 @@
+site_name: zoompy
+site_description: Schema-driven Python SDK and validated client for the Zoom API.
+site_url: https://herooftimeandspace.github.io/zoompy/
+repo_url: https://github.com/herooftimeandspace/zoompy
+repo_name: herooftimeandspace/zoompy
+docs_dir: docs
+site_dir: site
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+  palette:
+    - scheme: default
+      primary: blue grey
+      accent: teal
+  icon:
+    repo: fontawesome/brands/github
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+nav:
+  - Home: index.md
+  - Guides:
+      - Getting Started: guides/getting-started.md
+      - SDK Guide: guides/sdk-guide.md
+      - Validation and Schemas: guides/validation-and-schemas.md
+      - Logging and Runtime Behavior: guides/logging-and-runtime.md
+  - API Reference:
+      - Overview: api/index.md
+      - Package: api/zoompy.md
+      - Client: api/zoompy-client.md
+      - Schema: api/zoompy-schema.md
+      - SDK: api/zoompy-sdk.md
+      - Auth: api/zoompy-auth.md
+      - Config: api/zoompy-config.md
+      - Logging: api/zoompy-logging.md
+  - Project Docs:
+      - README: generated/readme.md
+      - Changelog: generated/changelog.md
+      - Contributing: generated/contributing.md
+      - Security: generated/security.md
+      - Env Example: generated/env-example.md
