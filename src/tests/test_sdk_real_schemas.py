@@ -12,6 +12,7 @@ want failures here to read like a contract diff rather than a mystery.
 
 from __future__ import annotations
 
+import inspect
 import json
 from collections.abc import Iterator
 from pathlib import Path
@@ -323,11 +324,16 @@ def test_real_schema_sdk_docstrings_include_operation_metadata(
     """Keep generated SDK methods understandable in editors and shells."""
 
     docstring = client.phone.users.get.__doc__
+    signature = str(inspect.signature(client.phone.users.get))
 
     assert docstring is not None
     assert "Operation ID:" in docstring
     assert "HTTP:" in docstring
+    assert "Python signature:" in docstring
     assert "/phone/users/{userId}" in docstring
+    assert "user_id: str" in docstring
+    assert "headers:" in signature
+    assert "timeout:" in signature
 
 
 def test_real_schema_sdk_operation_ids_stay_stable(client: ZoomClient) -> None:

@@ -39,6 +39,8 @@ Normal SDK calls:
 - expose `.raw(...)` when you explicitly want validated JSON instead
 - expose pagination helpers such as `iter_pages(...)`, `iter_all(...)`, and
   `paginate(...)`
+- expose schema-derived signatures and rich docstrings so editor hover,
+  `help(...)`, and generated API docs show expected parameter and return types
 
 Under the hood, every SDK call still delegates to the same validated request
 core, so the ergonomic layer does not bypass retries, logging, auth, or schema
@@ -359,6 +361,65 @@ pattern is simply:
 - call the SDK method with schema-derived snake_case parameters
 - work with the returned typed model object
 - use `.raw(...)` only when you explicitly want validated JSON
+
+### Learning request shapes from tooling
+
+The SDK is designed to teach you how to call it while you work.
+
+Generated SDK methods expose:
+
+- a schema-derived Python signature
+- path and query parameter names in snake_case
+- request body hints when a JSON body is accepted
+- typed response-model names when a representative response schema exists
+
+That means editor hover text, `inspect.signature(...)`, and `help(...)` can
+often answer "what arguments does this method need?" without sending you back
+to the raw OpenAPI files.
+
+Example:
+
+```python
+import inspect
+import logging
+
+from zoompy import ZoomClient
+
+logger = logging.getLogger(__name__)
+
+with ZoomClient() as client:
+    logger.info("%s", inspect.signature(client.phone.users.get))
+    help(client.users.create)
+```
+
+When a method accepts a JSON request body, there are two useful ways to learn
+the expected shape:
+
+1. Read the generated method docstring.
+2. Inspect the generated request model.
+
+Example:
+
+```python
+import logging
+
+from zoompy import ZoomClient
+
+logger = logging.getLogger(__name__)
+
+with ZoomClient() as client:
+    model = client.users.create.request_model
+    if model is not None:
+        logger.info("%s", list(model.model_fields))
+```
+
+The normal scripting path is still intentionally simple:
+
+- pass schema-derived snake_case path and query parameters directly
+- for body-capable methods, either:
+  - pass `body=<typed model or dict>`
+  - or pass leftover keyword arguments and let the SDK build the JSON body
+- let the returned typed model guide downstream access
 
 The lower-level model hooks still exist for advanced use and introspection:
 
