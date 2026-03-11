@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches-ignore:
+      - badges
     paths-ignore:
       - "badges/coverage.json"
   pull_request:
@@ -52,17 +54,49 @@ jobs:
             --output badges/coverage.json \
             --label "coverage (${{ github.ref_name }})"
 
-      - name: Commit updated coverage badge
+      - name: Publish coverage badge to badges branch
         if: github.event_name == 'push'
         run: |
-          if git diff --quiet -- badges/coverage.json; then
-            exit 0
-          fi
+          BRANCH_NAME="${{ github.ref_name }}"
+          WORKTREE_DIR="../badges-worktree"
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add badges/coverage.json
-          git commit -m "ci: update branch coverage badge [skip ci]"
-          git push
+          rm -rf "${WORKTREE_DIR}"
+
+          git fetch origin badges || true
+
+          if git show-ref --verify --quiet refs/remotes/origin/badges; then
+            git worktree add "${WORKTREE_DIR}" origin/badges
+            (
+              cd "${WORKTREE_DIR}"
+              git checkout -B badges origin/badges
+            )
+          else
+            git worktree add --detach "${WORKTREE_DIR}"
+            (
+              cd "${WORKTREE_DIR}"
+              git checkout --orphan badges
+              find . -mindepth 1 -maxdepth 1 \
+                ! -name .git \
+                -exec rm -rf {} +
+            )
+          fi
+
+          mkdir -p "${WORKTREE_DIR}/branch-coverage/${BRANCH_NAME}"
+          cp badges/coverage.json \
+            "${WORKTREE_DIR}/branch-coverage/${BRANCH_NAME}/coverage.json"
+          touch "${WORKTREE_DIR}/.nojekyll"
+
+          (
+            cd "${WORKTREE_DIR}"
+            if git diff --quiet -- branch-coverage/"${BRANCH_NAME}"/coverage.json .nojekyll; then
+              exit 0
+            fi
+            git add branch-coverage/"${BRANCH_NAME}"/coverage.json .nojekyll
+            git commit -m "ci: update ${BRANCH_NAME} coverage badge [skip ci]"
+            git push origin badges
+          )
 
   integration:
     runs-on: ubuntu-latest
