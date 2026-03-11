@@ -1,9 +1,23 @@
 """Public package exports for the `zoompy` library.
 
-The top-level namespace stays intentionally small even as the library grows.
-Users generally need the main client, optional logging configuration, and the
-runtime webhook registry. The dynamic SDK surface hangs off `ZoomClient`
-instances directly, so it does not need a large import surface here.
+`zoompy` intentionally exposes a small top-level import surface:
+
+* :class:`ZoomClient` is the main entry point for both the low-level request
+  API and the higher-level dynamic SDK.
+* :func:`configure_logging` enables the package's structured JSON logging.
+* :class:`WebhookRegistry` is available for advanced callers that want direct
+  runtime webhook validation control outside the client.
+
+The dynamic SDK itself hangs off :class:`ZoomClient` instances, so users do not
+need to import a large forest of generated service classes. In practice the
+most common import looks like:
+
+.. code-block:: python
+
+    from zoompy import ZoomClient
+
+    with ZoomClient() as client:
+        users = client.users.list(page_size=10)
 """
 
 from .client import ZoomClient

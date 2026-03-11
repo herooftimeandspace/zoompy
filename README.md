@@ -11,6 +11,9 @@ expected request and response behavior from Zoom's published schema documents.
 The library implementation is designed to satisfy those contracts while still
 remaining readable, typed, and suitable for real application code.
 
+## Discliamer
+`zoompy` was written with heavy ChatGPT use.
+
 ## Features
 
 ### Unified request interface
@@ -432,6 +435,29 @@ with ZoomClient() as client:
     client.request("GET", "/users", params={"page_size": 10})
 ```
 
+## API Documentation
+
+The repository can generate static API documentation directly from the shipped
+package docstrings using `pdoc`.
+
+Build the docs locally with:
+
+```bash
+PYTHONPATH=src pdoc -d google -o site zoompy
+```
+
+That command writes a static site into `site/`. Open `site/index.html` in a
+browser to inspect the generated API reference.
+
+The generated docs are useful for two audiences:
+
+- script authors who want to browse the public `ZoomClient` and SDK surface
+- maintainers who want published API docs to stay aligned with the actual code
+
+Because the docs come from the installed package and its docstrings, keeping
+module docstrings, class docstrings, and method docstrings accurate is now part
+of the project's public API discipline.
+
 ## Response Validation Details
 
 For each successful JSON response, the client:
@@ -529,6 +555,36 @@ The compose file:
 - runs `pytest`
 
 ## CI
+
+GitHub Actions runs the main quality gates on every push and every pull
+request:
+
+- `ruff check .`
+- `mypy src`
+- `python -m build`
+- `pytest -m "not integration"`
+- API docs generation with `pdoc`
+
+That means normal pushes already verify that tests, static analysis, packaging,
+and API-doc generation continue to work together.
+
+The live integration workflow still runs separately because it requires Zoom
+credentials from GitHub Secrets.
+
+## GitHub Pages
+
+API documentation is also published with GitHub Actions to GitHub Pages.
+
+The Pages workflow:
+
+- installs the package and dev dependencies
+- generates the static API docs with `pdoc`
+- uploads the generated `site/` directory
+- deploys that artifact to GitHub Pages on pushes to `main`
+
+After GitHub Pages is enabled for the repository, the published API docs become
+the easiest way to browse the SDK surface without reading the source tree
+directly.
 
 The GitHub Actions workflow defines two jobs:
 
