@@ -660,7 +660,13 @@ class SdkMethod:
             exclude_none=True,
         )
         if isinstance(validated, RootModel):
-            return dumped["root"]
+            # `RootModel.model_dump()` returns the root value directly in modern
+            # Pydantic releases instead of wrapping it in `{"root": ...}`.
+            # Keeping this guard tolerant avoids coupling callers to a
+            # serialization detail that differs by model shape.
+            if isinstance(dumped, Mapping):
+                return dumped["root"]
+            return dumped
         return dumped
 
     def _get_models(self) -> SdkModels:
