@@ -64,9 +64,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           rm -rf "${WORKTREE_DIR}"
 
-          git fetch origin badges || true
-
-          if git show-ref --verify --quiet refs/remotes/origin/badges; then
+          if git ls-remote --exit-code --heads origin badges >/dev/null 2>&1; then
+            git fetch --no-tags origin badges:refs/remotes/origin/badges
             git worktree add "${WORKTREE_DIR}" origin/badges
             (
               cd "${WORKTREE_DIR}"
