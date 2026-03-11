@@ -4,6 +4,13 @@
 published package name is `zoom-sdk-python`, and the Python import package is
 `zoom_sdk`.
 
+> AI assistance disclosure
+>
+> This repository was developed with substantial assistance from AI tooling,
+> including ChatGPT. That disclosure is intentional and should remain part of
+> the project documentation so future maintainers and users understand how the
+> codebase was produced and reviewed.
+
 It combines:
 
 - a schema-driven scripting SDK such as `client.users.get(...)`
