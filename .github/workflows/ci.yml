@@ -2,7 +2,12 @@ name: CI
 
 on:
   push:
+    paths-ignore:
+      - "badges/coverage.json"
   pull_request:
+
+permissions:
+  contents: write
 
 jobs:
   unit:
@@ -35,8 +40,26 @@ jobs:
           python scripts/build_docs.py
           python -m mkdocs build --strict
 
-      - name: Run unit tests
-        run: pytest -m "not integration"
+      - name: Run unit tests with coverage
+        run: |
+          pytest -m "not integration" --cov=zoom_sdk --cov-report=term --cov-report=xml
+
+      - name: Write coverage badge payload
+        if: github.event_name == 'push'
+        run: |
+          python scripts/write_coverage_badge.py --input coverage.xml --output badges/coverage.json
+
+      - name: Commit updated coverage badge
+        if: github.event_name == 'push'
+        run: |
+          if git diff --quiet -- badges/coverage.json; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add badges/coverage.json
+          git commit -m "ci: update branch coverage badge [skip ci]"
+          git push
 
   integration:
     runs-on: ubuntu-latest
