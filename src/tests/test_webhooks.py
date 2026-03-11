@@ -22,7 +22,7 @@ deliberately read-only and implementation-agnostic.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -86,7 +86,7 @@ def _build_webhook_parametrization() -> tuple[list[Any], list[str]]:
 def webhook_spec_path(request: pytest.FixtureRequest) -> Path:
     """Expose one webhook schema path to the generic tests below."""
 
-    return request.param
+    return cast(Path, request.param)
 
 
 # Materialize the JSON document so the tests do not each re-read the same file.

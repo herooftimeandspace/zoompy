@@ -32,13 +32,14 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 import httpx
-from jsonschema import Draft202012Validator
-from jsonschema.exceptions import ValidationError
+from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
+from jsonschema.exceptions import ValidationError  # type: ignore[import-untyped]
 
 
 @dataclass(frozen=True)
@@ -96,10 +97,13 @@ def load_openapi_spec(path: Path, expected_title: str | None = None) -> dict[str
         actual = spec.get("info", {}).get("title")
         if actual != expected_title:
             raise AssertionError(f"Expected OpenAPI title {expected_title!r}, got {actual!r}")
-    return spec
+    return spec if isinstance(spec, dict) else {}
 
 
-def get_request_callable(client: Any, fixture_name: str):
+def get_request_callable(
+    client: Any,
+    fixture_name: str,
+) -> Any:
     """Normalize the fixture contract to one simple callable shape.
 
     Every endpoint suite expects its pytest fixture to return a callable that

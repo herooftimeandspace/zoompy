@@ -248,6 +248,7 @@ def _collect_public_sdk_inventory(client: ZoomClient) -> dict[str, dict[str, Any
     """
 
     _ = client.sdk
+    assert client._sdk is not None
     root = client._sdk._root
 
     def walk(node: Any, prefix: tuple[str, ...] = ()) -> dict[str, dict[str, Any]]:
@@ -279,7 +280,8 @@ def _collect_public_sdk_inventory(client: ZoomClient) -> dict[str, dict[str, Any
 def _load_golden_public_surface() -> dict[str, dict[str, Any]]:
     """Load the checked-in full SDK inventory used as the golden contract."""
 
-    return json.loads(_GOLDEN_PUBLIC_SURFACE_PATH.read_text(encoding="utf-8"))
+    payload = json.loads(_GOLDEN_PUBLIC_SURFACE_PATH.read_text(encoding="utf-8"))
+    return payload if isinstance(payload, dict) else {}
 
 
 def test_real_schema_sdk_exposes_expected_top_level_namespaces(

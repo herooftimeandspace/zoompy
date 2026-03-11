@@ -19,7 +19,7 @@ contract logic diverge.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from _path_schema_suite import (
@@ -75,7 +75,7 @@ def _request_headers_for_spec_path(path: Path) -> dict[str, str] | None:
 def master_account_spec_path(request: pytest.FixtureRequest) -> Path:
     """Expose one master-account schema path to the generic tests below."""
 
-    return request.param
+    return cast(Path, request.param)
 
 
 @pytest.fixture

@@ -630,6 +630,8 @@ class SdkMethod:
 
         if isinstance(page, list):
             return page
+        if page is None:
+            return []
 
         candidate = self._preferred_collection(page)
         if candidate is not None:

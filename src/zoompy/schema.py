@@ -55,7 +55,8 @@ def _iter_json_files(root: Any) -> Iterable[Path]:
 def _load_json_spec(path: Path) -> dict[str, Any]:
     """Load one OpenAPI document from disk."""
 
-    return json.loads(path.read_text(encoding="utf-8"))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return payload if isinstance(payload, dict) else {}
 
 
 def _spec_title(spec: Mapping[str, Any], fallback: str) -> str:
