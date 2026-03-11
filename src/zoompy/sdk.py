@@ -1325,14 +1325,23 @@ def _schema_annotation(schema: Mapping[str, Any] | None) -> Any:
     if schema_type == "array":
         items = normalized.get("items")
         if isinstance(items, Mapping):
-            return list[_schema_annotation(cast(Mapping[str, Any], items))]
+            return GenericAlias(
+                list,
+                _schema_annotation(cast(Mapping[str, Any], items)),
+            )
         return list[Any]
     if schema_type == "object" or "properties" in normalized:
         return dict[str, Any]
 
     additional = normalized.get("additionalProperties")
     if isinstance(additional, Mapping):
-        return dict[str, _schema_annotation(cast(Mapping[str, Any], additional))]
+        return GenericAlias(
+            dict,
+            (
+                str,
+                _schema_annotation(cast(Mapping[str, Any], additional)),
+            ),
+        )
 
     return Any
 
