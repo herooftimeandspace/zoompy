@@ -555,6 +555,13 @@ Shields-compatible badge payload to `badges/coverage.json` on branch pushes.
 That is what drives the branch-specific coverage badges at the top of this
 README.
 
+GitHub Pages publication is intentionally stricter than docs validation:
+
+- CI validates the docs site on pushes and pull requests
+- the dedicated Pages publishing workflow only runs after a successful `CI`
+  workflow on `main`
+- docs are not published from `dev` or `staging`
+
 Build the docs locally with:
 
 ```bash
@@ -581,6 +588,21 @@ The generated docs are useful for two audiences:
 Because the docs come from the installed package, repository root markdown
 files, and generated API pages, keeping docstrings and project documents
 accurate is part of the project's public API discipline.
+
+## Recommended Branch Promotion Model
+
+The repository is designed to work best with a three-branch promotion chain:
+
+- `dev` is the default integration branch and the normal base for feature work
+- `staging` receives promotion PRs from `dev`
+- `main` receives promotion PRs from `staging`
+
+The CI workflows are configured so that:
+
+- pushes and pull requests always run the unit-quality gate
+- integration tests only run for `staging` and `main`, or for pull requests
+  targeting those branches
+- GitHub Pages only publishes after `main` CI succeeds
 
 ## Response Validation Details
 

@@ -1,30 +1,10 @@
 name: Docs
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "README.md"
-      - "CHANGELOG.md"
-      - "CONTRIBUTING.md"
-      - "SECURITY.md"
-      - ".env.example"
-      - "docs/**"
-      - "mkdocs.yml"
-      - "scripts/build_docs.py"
-      - "src/zoom_sdk/**/*.py"
-  pull_request:
-    paths:
-      - "README.md"
-      - "CHANGELOG.md"
-      - "CONTRIBUTING.md"
-      - "SECURITY.md"
-      - ".env.example"
-      - "docs/**"
-      - "mkdocs.yml"
-      - "scripts/build_docs.py"
-      - "src/zoom_sdk/**/*.py"
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
   workflow_dispatch:
 
 permissions:
@@ -37,10 +17,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  build-docs:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        if: github.event_name == 'workflow_run'
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: actions/checkout@v6
+        if: github.event_name == 'workflow_dispatch'
 
       - uses: actions/setup-python@v6
         with:
@@ -68,9 +61,9 @@ jobs:
         with:
           path: site
 
-  deploy:
-    needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+  deploy-docs:
+    needs: build-docs
+    if: needs.build-docs.result == 'success'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

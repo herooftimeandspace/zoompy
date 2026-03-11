@@ -7,6 +7,14 @@ semantic-versioning policy for the public SDK surface.
 
 ## [Unreleased]
 
+### Changed
+- CI now runs integration tests only for `staging` and `main`, while `dev` and
+  ordinary feature work stay on the faster unit-quality path.
+- Documentation publishing now runs from a dedicated `workflow_run` pipeline
+  that only deploys GitHub Pages after a successful `main` CI run.
+- Repository documentation now explains the intended promotion path:
+  `dev -> staging -> main`.
+
 ## [1.0.1]
 
 ### Added

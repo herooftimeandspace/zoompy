@@ -67,6 +67,11 @@ jobs:
   integration:
     runs-on: ubuntu-latest
     needs: unit
+    if: |
+      (github.event_name == 'push' &&
+        (github.ref_name == 'staging' || github.ref_name == 'main')) ||
+      (github.event_name == 'pull_request' &&
+        (github.base_ref == 'staging' || github.base_ref == 'main'))
     env:
       ZOOM_ACCOUNT_ID: ${{ secrets.ZOOM_ACCOUNT_ID }}
       ZOOM_CLIENT_ID: ${{ secrets.ZOOM_CLIENT_ID }}
