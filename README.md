@@ -509,26 +509,45 @@ with ZoomClient() as client:
 
 ## API Documentation
 
-The repository can generate static API documentation directly from the shipped
-package docstrings using `pdoc`.
+The repository now publishes a single documentation site built with
+`mkdocs-material`.
+
+That site combines:
+
+- narrative guides under `docs/`
+- generated copies of the root project documents:
+  - `README.md`
+  - `CHANGELOG.md`
+  - `CONTRIBUTING.md`
+  - `SECURITY.md`
+- generated API reference HTML from `pdoc`
 
 Build the docs locally with:
 
 ```bash
-PYTHONPATH=src ./.venv/bin/python -m pdoc -d google -o site zoompy
+./.venv/bin/python scripts/build_docs.py
+./.venv/bin/python -m mkdocs build --strict
 ```
 
-That command writes a static site into `site/`. Open `site/index.html` in a
-browser to inspect the generated API reference.
+For local preview with live reload:
+
+```bash
+./.venv/bin/python scripts/build_docs.py
+./.venv/bin/python -m mkdocs serve
+```
+
+The built site is written to `site/`. Open `site/index.html` or use the MkDocs
+development server to inspect the documentation locally.
 
 The generated docs are useful for two audiences:
 
 - script authors who want to browse the public `ZoomClient` and SDK surface
-- maintainers who want published API docs to stay aligned with the actual code
+- maintainers who want the published docs to stay aligned with the actual code
+  and root project documents
 
-Because the docs come from the installed package and its docstrings, keeping
-module docstrings, class docstrings, and method docstrings accurate is now part
-of the project's public API discipline.
+Because the docs come from the installed package, repository root markdown
+files, and generated API pages, keeping docstrings and project documents
+accurate is part of the project's public API discipline.
 
 ## Response Validation Details
 
@@ -635,28 +654,31 @@ request:
 - `mypy src _openapi_contract.py`
 - `python -m build`
 - `pytest -m "not integration"`
-- API docs generation with `pdoc`
+- documentation-site assembly with `scripts/build_docs.py`
+- `mkdocs build --strict`
 
 That means normal pushes already verify that tests, static analysis, packaging,
-and API-doc generation continue to work together.
+and documentation generation continue to work together.
 
 The live integration workflow still runs separately because it requires Zoom
 credentials from GitHub Secrets.
 
 ## GitHub Pages
 
-API documentation is also published with GitHub Actions to GitHub Pages.
+The full documentation site is also published with GitHub Actions to GitHub
+Pages.
 
 The Pages workflow:
 
 - installs the package and dev dependencies
-- generates the static API docs with `pdoc`
+- assembles the docs tree with `scripts/build_docs.py`
+- builds the MkDocs Material site
 - uploads the generated `site/` directory
 - deploys that artifact to GitHub Pages on pushes to `main`
 
-After GitHub Pages is enabled for the repository, the published API docs become
-the easiest way to browse the SDK surface without reading the source tree
-directly.
+After GitHub Pages is enabled for the repository, the published site becomes the
+main way to browse the SDK guides, API reference, changelog, contribution
+guidance, and security policy without reading the source tree directly.
 
 The GitHub Actions workflow defines two jobs:
 

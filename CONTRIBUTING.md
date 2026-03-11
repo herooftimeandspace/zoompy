@@ -15,6 +15,15 @@ Use the repository virtual environment for validation commands:
 ./.venv/bin/python -m pytest -q
 ./.venv/bin/python -m ruff check .
 ./.venv/bin/python -m mypy src
+./.venv/bin/python scripts/build_docs.py
+./.venv/bin/python -m mkdocs build --strict
+```
+
+For local docs preview:
+
+```bash
+./.venv/bin/python scripts/build_docs.py
+./.venv/bin/python -m mkdocs serve
 ```
 
 ## Schema workflow

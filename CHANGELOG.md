@@ -7,6 +7,22 @@ semantic-versioning policy for the public SDK surface.
 
 ## [Unreleased]
 
+## [1.0.1]
+
+### Added
+- A MkDocs Material documentation suite that combines narrative guides, the
+  canonical project markdown files, and generated API reference output from
+  `pdoc`.
+- A dedicated docs build script, `scripts/build_docs.py`, to assemble the
+  published documentation tree from the repository source files.
+
+### Changed
+- GitHub Actions CI now validates the full documentation site build with MkDocs
+  Material instead of only generating raw `pdoc` HTML.
+- GitHub Pages now publishes the integrated documentation site rather than a
+  standalone API-reference artifact.
+- Local documentation workflows now use the MkDocs build and serve commands.
+
 ## [1.0.0]
 
 ### Added
