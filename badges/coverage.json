@@ -1,6 +1,6 @@
 {
-  "color": "lightgrey",
+  "color": "yellowgreen",
   "label": "coverage",
-  "message": "pending",
+  "message": "87.3%",
   "schemaVersion": 1
 }
