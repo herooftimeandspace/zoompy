@@ -62,8 +62,8 @@ def _extract_user_rows(users: Iterable[object]) -> list[tuple[str, str, str, str
     return rows
 
 
-def _log_table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> None:
-    """Render a plain ASCII table through the standard logging pipeline.
+def _print_table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> None:
+    """Render a plain ASCII table for terminal output.
 
     Keeping the formatter local and simple makes the script easy to copy into
     another project later, and it avoids adding dependencies just to pretty-
@@ -81,16 +81,16 @@ def _log_table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> None:
         )
 
     divider = "-+-".join("-" * width for width in widths)
-    LOGGER.info(format_row(headers))
-    LOGGER.info(divider)
+    print(format_row(headers))
+    print(divider)
     for row in rows:
-        LOGGER.info(format_row(row))
+        print(format_row(row))
 
 
 def main() -> None:
     """Fetch the first ten users and print them in a terminal table."""
 
-    configure_logging("INFO")
+    configure_logging("WARNING")
 
     with ZoomClient() as client:
         users = tuple(client.users.list.iter_all(page_size=1000))[:10]
@@ -100,7 +100,7 @@ def main() -> None:
         LOGGER.info("No users returned.")
         return
 
-    _log_table(
+    _print_table(
         headers=("First Name", "Last Name", "Display Name", "Email"),
         rows=rows,
     )
