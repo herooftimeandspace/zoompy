@@ -530,8 +530,18 @@ That site combines:
   - `README.md`
   - `CHANGELOG.md`
   - `CONTRIBUTING.md`
-  - `SECURITY.md`
+- `SECURITY.md`
 - generated API reference HTML from `pdoc`
+
+Documentation is rebuilt automatically in GitHub Actions whenever
+documentation-facing sources change, including:
+
+- files under `docs/`
+- `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, and `SECURITY.md`
+- `mkdocs.yml`
+- `scripts/build_docs.py`
+- Python modules under `src/zoom_sdk/`, so docstring changes rebuild the API
+  reference too
 
 Build the docs locally with:
 
