@@ -19,11 +19,13 @@ single source of truth.
 
 from __future__ import annotations
 
+import inspect
 import json
 import keyword
 import re
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
+from functools import cached_property
 from types import GenericAlias
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -62,6 +64,8 @@ class SdkParameter:
     python_name: str
     location: str
     required: bool
+    schema: Mapping[str, Any] | None
+    description: str | None
 
 
 @dataclass(frozen=True)
@@ -404,6 +408,73 @@ class SdkMethod:
         self._model_factory = model_factory
         self._models: SdkModels | None = None
         self.__doc__ = self._build_docstring()
+
+    @cached_property
+    def __signature__(self) -> inspect.Signature:
+        """Expose a schema-derived Python signature for editor tooling.
+
+        `SdkMethod` instances are dynamic callables rather than plain functions,
+        so Python cannot infer a helpful signature automatically. Building one
+        here gives users meaningful editor hover text, `help(...)` output, and
+        `inspect.signature(...)` results without changing the permissive runtime
+        calling convention that the SDK relies on internally.
+        """
+
+        parameters: list[inspect.Parameter] = []
+        for parameter in (*self._operation.path_parameters, *self._operation.query_parameters):
+            annotation = _parameter_annotation(parameter)
+            default = (
+                inspect.Signature.empty if parameter.required else None
+            )
+            parameters.append(
+                inspect.Parameter(
+                    name=self._tooling_parameter_name(parameter),
+                    kind=inspect.Parameter.KEYWORD_ONLY,
+                    default=default,
+                    annotation=annotation,
+                )
+            )
+
+        if self._operation.has_json_body:
+            parameters.append(
+                inspect.Parameter(
+                    name="body",
+                    kind=inspect.Parameter.KEYWORD_ONLY,
+                    default=None,
+                    annotation=self._body_annotation(),
+                )
+            )
+
+        parameters.extend(
+            [
+                inspect.Parameter(
+                    name="headers",
+                    kind=inspect.Parameter.KEYWORD_ONLY,
+                    default=None,
+                    annotation=Mapping[str, str] | None,
+                ),
+                inspect.Parameter(
+                    name="timeout",
+                    kind=inspect.Parameter.KEYWORD_ONLY,
+                    default=None,
+                    annotation=float | None,
+                ),
+            ]
+        )
+
+        if self._operation.has_json_body:
+            parameters.append(
+                inspect.Parameter(
+                    name="body_fields",
+                    kind=inspect.Parameter.VAR_KEYWORD,
+                    annotation=Any,
+                )
+            )
+
+        return inspect.Signature(
+            parameters=parameters,
+            return_annotation=self._return_annotation(),
+        )
 
     def __call__(self, **kwargs: Any) -> BaseModel | dict[str, Any] | list[Any] | None:
         """Execute the SDK method using scripting-friendly defaults.
@@ -769,6 +840,12 @@ class SdkMethod:
             parameter.python_name: parameter.original_name
             for parameter in self._operation.query_parameters
         }
+        query_name_map.update(
+            {
+                parameter.original_name: parameter.original_name
+                for parameter in self._operation.query_parameters
+            }
+        )
         params: dict[str, Any] = {}
         body: dict[str, Any] = {}
 
@@ -803,6 +880,7 @@ class SdkMethod:
             "",
             f"Operation ID: {self._operation.operation_id}",
             f"HTTP: {self._operation.http_method} {self._operation.path}",
+            f"Python signature: {self._signature_text()}",
         ]
 
         if self._operation.description:
@@ -812,16 +890,20 @@ class SdkMethod:
             lines.extend(["", "Path parameters:"])
             for parameter in self._operation.path_parameters:
                 lines.append(
-                    f"- {parameter.python_name}"
-                    f" (Zoom name: {parameter.original_name})"
+                    _parameter_doc_line(
+                        parameter,
+                        display_name=self._tooling_parameter_name(parameter),
+                    )
                 )
 
         if self._operation.query_parameters:
             lines.extend(["", "Query parameters:"])
             for parameter in self._operation.query_parameters:
                 lines.append(
-                    f"- {parameter.python_name}"
-                    f" (Zoom name: {parameter.original_name})"
+                    _parameter_doc_line(
+                        parameter,
+                        display_name=self._tooling_parameter_name(parameter),
+                    )
                 )
 
         if self._operation.has_json_body:
@@ -829,22 +911,96 @@ class SdkMethod:
                 [
                     "",
                     "Request body:",
-                    "- leftover kwargs become JSON body fields by default",
-                    "- or pass the payload explicitly as `body=` or `json=`",
+                    f"- body: {_annotation_label(self._body_annotation())}",
+                    "- leftover keyword arguments become JSON body fields by default",
+                    "- pass `body=` when you already have a complete payload object",
+                    "- advanced callers may still use `.raw(..., json=...)`",
                 ]
             )
+            request_fields = _schema_field_summary(self._operation.request_schema)
+            if request_fields:
+                lines.append("- top-level body fields:")
+                lines.extend(f"  - {field}" for field in request_fields)
 
         if self._operation.response_schema is not None:
             lines.extend(
                 [
                     "",
                     "Return shape:",
-                    "- normal calls return a typed Pydantic model when possible",
-                    "- use `.raw(...)` for plain JSON",
+                    f"- normal calls return: "
+                    f"{_annotation_label(self._return_annotation())}",
+                    "- use `.raw(...)` for plain validated JSON",
                 ]
             )
+            response_fields = _schema_field_summary(self._operation.response_schema)
+            if response_fields:
+                lines.append("- representative response fields:")
+                lines.extend(f"  - {field}" for field in response_fields)
+
+        lines.extend(
+            [
+                "",
+                "Tooling hints:",
+                "- use editor hover or `help(...)` to inspect the generated signature",
+                "- inspect `.request_model` for typed request bodies when present",
+                "- inspect `.response_model` to see the generated response model",
+            ]
+        )
 
         return "\n".join(lines)
+
+    def _body_annotation(self) -> Any:
+        """Return the most helpful annotation for the `body=` argument.
+
+        When a typed request model exists, that is the most useful hint for
+        callers because it gives IDEs field names and nested shapes. For body
+        schemas that do not map cleanly to a Pydantic model, we fall back to a
+        lightweight schema-derived annotation so users still see an expected
+        payload type instead of raw `Any`.
+        """
+
+        request_model = self.request_model
+        if request_model is not None:
+            return request_model | None
+        return _optional_annotation(_schema_annotation(self._operation.request_schema))
+
+    def _return_annotation(self) -> Any:
+        """Return the best available runtime return annotation for this method."""
+
+        response_model = self.response_model
+        if response_model is not None:
+            return response_model | None
+        if self._operation.response_schema is not None:
+            return _optional_annotation(_schema_annotation(self._operation.response_schema))
+        return dict[str, Any] | list[Any] | None
+
+    def _signature_text(self) -> str:
+        """Render a compact, human-readable signature for docstrings."""
+
+        signature = inspect.signature(self)
+        return f"{self._operation.operation_name}{signature}"
+
+    @cached_property
+    def _tooling_parameter_names(self) -> dict[tuple[str, str], str]:
+        """Pick unique parameter names for signatures and generated docs."""
+
+        names: dict[tuple[str, str], str] = {}
+        used: set[str] = set()
+        for parameter in (*self._operation.path_parameters, *self._operation.query_parameters):
+            chosen_name = parameter.python_name
+            if chosen_name in used:
+                if parameter.original_name not in used and parameter.original_name.isidentifier():
+                    chosen_name = parameter.original_name
+                else:
+                    chosen_name = f"{parameter.location}_{parameter.python_name}"
+            used.add(chosen_name)
+            names[(parameter.location, parameter.original_name)] = chosen_name
+        return names
+
+    def _tooling_parameter_name(self, parameter: SdkParameter) -> str:
+        """Return the resolved signature/docstring name for one parameter."""
+
+        return self._tooling_parameter_names[(parameter.location, parameter.original_name)]
 
 
 class ServiceNode:
@@ -1099,6 +1255,15 @@ def _extract_parameters(
             python_name=_identifier(original_name),
             location=location,
             required=bool(resolved.get("required")),
+            schema=cast(
+                Mapping[str, Any] | None,
+                tools.resolve_schema(operation.spec, resolved.get("schema"))
+                if isinstance(resolved.get("schema"), Mapping)
+                else None,
+            ),
+            description=cast(str | None, resolved.get("description"))
+            if isinstance(resolved.get("description"), str)
+            else None,
         )
 
         if location == "path":
@@ -1107,6 +1272,203 @@ def _extract_parameters(
             query_parameters.append(parameter)
 
     return tuple(path_parameters), tuple(query_parameters)
+
+
+def _parameter_annotation(parameter: SdkParameter) -> Any:
+    """Return the editor-facing annotation for one SDK parameter."""
+
+    annotation = _schema_annotation(parameter.schema)
+    if parameter.required:
+        return annotation
+    return _optional_annotation(annotation)
+
+
+def _schema_annotation(schema: Mapping[str, Any] | None) -> Any:
+    """Map a small schema fragment onto a practical Python annotation.
+
+    This helper exists purely for tooling and documentation. The low-level JSON
+    Schema validator remains the real source of truth, so the annotation only
+    needs to be accurate enough to guide a human toward a valid request shape.
+    """
+
+    if not isinstance(schema, Mapping):
+        return Any
+
+    tools = OpenApiSchemaTools()
+    normalized = cast(Mapping[str, Any], tools.normalize_schema(schema))
+
+    enum_values = normalized.get("enum")
+    if isinstance(enum_values, list) and enum_values:
+        return Literal.__getitem__(tuple(enum_values))
+
+    for keyword_name in ("oneOf", "anyOf"):
+        variants = normalized.get(keyword_name)
+        if isinstance(variants, list):
+            annotations = [
+                _schema_annotation(cast(Mapping[str, Any], variant))
+                for variant in variants
+                if isinstance(variant, Mapping)
+            ]
+            if annotations:
+                if len(annotations) == 1:
+                    return annotations[0]
+                return _union_type(annotations)
+
+    if isinstance(normalized.get("allOf"), list):
+        merged = _merge_all_of_schema(normalized)
+        return _schema_annotation(merged)
+
+    schema_type = normalized.get("type")
+    if schema_type == "string":
+        return str
+    if schema_type == "integer":
+        return int
+    if schema_type == "number":
+        return float
+    if schema_type == "boolean":
+        return bool
+    if schema_type == "array":
+        items = normalized.get("items")
+        if isinstance(items, Mapping):
+            return list[_schema_annotation(cast(Mapping[str, Any], items))]
+        return list[Any]
+    if schema_type == "object" or "properties" in normalized:
+        return dict[str, Any]
+
+    additional = normalized.get("additionalProperties")
+    if isinstance(additional, Mapping):
+        return dict[str, _schema_annotation(cast(Mapping[str, Any], additional))]
+
+    return Any
+
+
+def _annotation_label(annotation: Any) -> str:
+    """Render one Python annotation into a docstring-friendly string."""
+
+    if annotation is inspect.Signature.empty:
+        return "Any"
+    if annotation is Any:
+        return "Any"
+    if annotation is None or annotation is type(None):
+        return "None"
+    if isinstance(annotation, type):
+        return annotation.__name__
+    return repr(annotation).replace("typing.", "")
+
+
+def _parameter_doc_line(
+    parameter: SdkParameter,
+    *,
+    display_name: str | None = None,
+) -> str:
+    """Format one parameter line for generated SDK docstrings."""
+
+    requirement = "required" if parameter.required else "optional"
+    pieces = [
+        f"- {(display_name or parameter.python_name)}: "
+        f"{_annotation_label(_parameter_annotation(parameter))}",
+        f"({requirement}, {parameter.location}, Zoom name: {parameter.original_name})",
+    ]
+    if parameter.description:
+        pieces.append(f"- {parameter.description.strip()}")
+    return " ".join(pieces)
+
+
+def _schema_field_summary(
+    schema: Mapping[str, Any] | None,
+    *,
+    max_fields: int = 8,
+) -> list[str]:
+    """Summarize the first few top-level schema fields for request guidance.
+
+    These summaries are intentionally short. The goal is to make `help(...)` and
+    generated HTML docs immediately useful, not to dump an entire OpenAPI schema
+    into every method docstring.
+    """
+
+    if not isinstance(schema, Mapping):
+        return []
+
+    merged = _merge_all_of_schema(cast(Mapping[str, Any], OpenApiSchemaTools().normalize_schema(schema)))
+    properties = merged.get("properties")
+    required = {
+        name for name in merged.get("required", [])
+        if isinstance(name, str)
+    }
+    if not isinstance(properties, Mapping):
+        return []
+
+    summary: list[str] = []
+    for index, (name, property_schema) in enumerate(properties.items()):
+        if index >= max_fields:
+            summary.append("...")
+            break
+        python_name = _identifier(str(name))
+        requirement = "required" if name in required else "optional"
+        property_annotation = _schema_annotation(
+            cast(Mapping[str, Any], property_schema)
+            if isinstance(property_schema, Mapping)
+            else None
+        )
+        if name not in required:
+            property_annotation = _optional_annotation(property_annotation)
+        type_label = _annotation_label(property_annotation)
+        summary.append(f"{python_name}: {type_label} ({requirement})")
+    return summary
+
+
+def _merge_all_of_schema(schema: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Merge `allOf` branches for documentation-oriented type summaries."""
+
+    all_of = schema.get("allOf")
+    if not isinstance(all_of, list):
+        return schema
+
+    merged: dict[str, Any] = {
+        key: value for key, value in schema.items() if key != "allOf"
+    }
+    merged_properties = dict(cast(Mapping[str, Any], merged.get("properties", {})))
+    merged_required = list(cast(list[Any], merged.get("required", [])))
+
+    for part in all_of:
+        if not isinstance(part, Mapping):
+            continue
+        candidate = _merge_all_of_schema(cast(Mapping[str, Any], part))
+        candidate_properties = candidate.get("properties")
+        if isinstance(candidate_properties, Mapping):
+            merged_properties.update(candidate_properties)
+        candidate_required = candidate.get("required")
+        if isinstance(candidate_required, list):
+            for name in candidate_required:
+                if isinstance(name, str) and name not in merged_required:
+                    merged_required.append(name)
+
+    if merged_properties:
+        merged["properties"] = merged_properties
+        merged.setdefault("type", "object")
+    if merged_required:
+        merged["required"] = merged_required
+    return merged
+
+
+def _optional_annotation(annotation: Any) -> Any:
+    """Wrap one annotation in `None` unless it is already optional-ish."""
+
+    if annotation is Any:
+        return annotation
+    return annotation | None
+
+
+def _union_type(variants: list[Any]) -> Any:
+    """Join multiple annotation variants into one union annotation."""
+
+    if not variants:
+        return Any
+
+    union_annotation = variants[0]
+    for variant in variants[1:]:
+        union_annotation = union_annotation | variant
+    return union_annotation
 
 
 def _namespace_from_path(path: str) -> tuple[str, ...]:
