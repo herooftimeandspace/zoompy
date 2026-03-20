@@ -7,6 +7,24 @@ semantic-versioning policy for the public SDK surface.
 
 ## [Unreleased]
 
+### Added
+- Sideloaded PBX schema support under `src/zoom_sdk/sideloaded`, including
+  HAR-backed route inventory coverage and package-resource checks.
+- Generated PBX SDK namespaces and methods under `client.pbx.*`, including:
+  - `client.pbx.devices.get`
+  - `client.pbx.devices.update`
+  - `client.pbx.devices.list_extensions`
+  - `client.pbx.devices.list_manufacturers`
+  - `client.pbx.devices.list_models`
+  - `client.pbx.devices.list_service_endpoints`
+  - `client.pbx.account.get_current`
+  - `client.pbx.account.get_user_telemetry`
+  - `client.pbx.config.get_enable_xss_filter`
+  - `client.pbx.web.get_menu`
+  - `client.pbx.web.get_user_info`
+- PBX write support for `PATCH /api/v2/pbx/account/{accountId}/device/{deviceId}`
+  with typed request/response models derived from the sideloaded schema.
+
 ### Changed
 - CI now runs integration tests only for `staging` and `main`, while `dev` and
   ordinary feature work stay on the faster unit-quality path.
@@ -14,6 +32,19 @@ semantic-versioning policy for the public SDK surface.
   that only deploys GitHub Pages after a successful `main` CI run.
 - Repository documentation now explains the intended promotion path:
   `dev -> staging -> main`.
+- Client configuration now supports `ZOOM_PBX_BASE_URL` (and constructor
+  override `pbx_base_url`), defaulting to `https://us01pbx.zoom.us`.
+- Request routing now sends `/api/v2/pbx/**` traffic to the PBX base URL while
+  preserving existing schema-based base URL selection for other routes.
+- Account-scoped PBX SDK calls now auto-discover and cache `accountId` via
+  `GET /api/v2/pbx/current/account` when `account_id` is omitted.
+- Schema indexing now supports per-operation SDK overrides (`x-sdk.namespace`
+  and `x-sdk.alias`) so sideloaded routes can be mapped cleanly without
+  changing synced official schemas.
+- SDK golden public-surface inventory and PBX-focused test coverage were
+  expanded to pin the new PBX namespaces, aliases, models, and route behavior.
+- Documentation and environment examples now include PBX configuration and PBX
+  SDK usage examples with synthetic sample identifiers.
 
 ## [1.0.1]
 
