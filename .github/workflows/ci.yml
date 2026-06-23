@@ -17,7 +17,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6  # TODO: pin to specific SHA for reproducibility
+      - uses: actions/checkout@v7  # TODO: pin to specific SHA for reproducibility
 
       - uses: actions/setup-python@v6  # TODO: pin to specific SHA for reproducibility
         with:
@@ -59,7 +59,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6  # TODO: pin to specific SHA for reproducibility
+      - uses: actions/checkout@v7  # TODO: pin to specific SHA for reproducibility
 
       - uses: actions/setup-python@v6  # TODO: pin to specific SHA for reproducibility
         with:
@@ -142,7 +142,7 @@ jobs:
       ZOOM_OAUTH_URL: ${{ secrets.ZOOM_OAUTH_URL }}
       ZOOM_TOKEN_SKEW_SECONDS: ${{ secrets.ZOOM_TOKEN_SKEW_SECONDS }}
     steps:
-      - uses: actions/checkout@v6  # TODO: pin to specific SHA for reproducibility
+      - uses: actions/checkout@v7  # TODO: pin to specific SHA for reproducibility
 
       - uses: actions/setup-python@v6  # TODO: pin to specific SHA for reproducibility
         with:
