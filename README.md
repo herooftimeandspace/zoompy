@@ -359,6 +359,55 @@ Generated SDK methods support a few conventions:
 - `.raw_body(...)` is available for compatibility decoders that intentionally
   need bounded provider bytes before application-owned decoding and validation
 
+### Zoom Phone directory readers
+
+The bundled schema inventory exposes the current read-only Zoom Phone directory
+families through the normal Python attribute-chain API. Python does not need a
+separate `PhoneDirectory` wrapper or a handwritten options type because method
+names, query parameters, response models, and pagination behavior are generated
+from the same OpenAPI operations as the rest of the SDK.
+
+| Python method | Zoom API endpoint |
+| --- | --- |
+| `client.phone.users.list(...)` | `GET /phone/users` |
+| `client.phone.common_areas.list(...)` | `GET /phone/common_areas` |
+| `client.phone.shared_line_groups.list(...)` | `GET /phone/shared_line_groups` |
+| `client.phone.call_queues.list(...)` | `GET /phone/call_queues` |
+
+All four methods use the shared `iter_pages(...)`, `paginate(...)`, and
+`iter_all(...)` helpers. Query arguments remain Pythonic and schema-derived;
+for example, `department=`, `cost_center=`, and `common_area_device_type=` are
+only available when the matched operation publishes them.
+
+```python
+from zoom_sdk import ZoomClient
+
+with ZoomClient() as client:
+    for user in client.phone.users.list.iter_all(
+        page_size=100,
+        department="Technology",
+    ):
+        process_user(user)
+
+    for page in client.phone.common_areas.list.paginate(
+        page_size=100,
+        common_area_device_type=2,
+    ):
+        process_common_areas(page.items)
+```
+
+The older `GET /phone/common_area_phones` shape is not present in the bundled
+Zoom OpenAPI inventory. The supported current replacement is
+`GET /phone/common_areas`, exposed as `client.phone.common_areas.list(...)`.
+If a future schema sync publishes a legacy operation, the generated inventory
+and its golden contract will make that addition explicit rather than silently
+guessing at an undocumented endpoint.
+
+Directory methods return provider-derived data. Do not log raw response
+payloads, authorization headers, bearer tokens, client secrets, or OAuth
+responses. Log only the non-secret identifiers and aggregate counts required
+for the consuming workflow.
+
 ### Typed SDK access
 
 The SDK layer now returns typed Pydantic model objects by default whenever a

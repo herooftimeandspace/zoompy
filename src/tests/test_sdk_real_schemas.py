@@ -22,6 +22,7 @@ import pytest
 from pydantic import BaseModel
 
 from zoom_sdk import ZoomClient, __version__
+from zoom_sdk.sdk import SdkMethod
 
 _GOLDEN_PUBLIC_SURFACE_PATH = (
     Path(__file__).parent / "golden" / "sdk_public_surface.json"
@@ -151,6 +152,41 @@ _SCHEMA_PARAMETER_NAMES = {
     },
 }
 
+_PHONE_DIRECTORY_READERS = (
+    (
+        "phone.users.list",
+        "listPhoneUsers",
+        "/phone/users",
+        "users",
+        "department",
+        "Technology",
+    ),
+    (
+        "phone.common_areas.list",
+        "listCommonAreas",
+        "/phone/common_areas",
+        "common_areas",
+        "common_area_device_type",
+        2,
+    ),
+    (
+        "phone.shared_line_groups.list",
+        "listSharedLineGroups",
+        "/phone/shared_line_groups",
+        "shared_line_groups",
+        "page_size",
+        2,
+    ),
+    (
+        "phone.call_queues.list",
+        "listCallQueues",
+        "/phone/call_queues",
+        "call_queues",
+        "cost_center",
+        "IT",
+    ),
+)
+
 
 @pytest.fixture
 def client() -> Iterator[ZoomClient]:
@@ -161,7 +197,7 @@ def client() -> Iterator[ZoomClient]:
     enough to bypass live OAuth.
     """
 
-    sdk_client = ZoomClient(access_token="test-access-token")
+    sdk_client = ZoomClient(access_token="test-access-token", load_dotenv=False)
     try:
         yield sdk_client
     finally:
@@ -300,6 +336,104 @@ def test_real_schema_sdk_exposes_expected_top_level_namespaces(
 
     assert not hasattr(client.phone, "call_queue_analytic")
     assert not hasattr(client, "pbx")
+
+
+@pytest.mark.parametrize(
+    (
+        "method_path",
+        "operation_id",
+        "endpoint_path",
+        "collection_key",
+        "filter_name",
+        "filter_value",
+    ),
+    _PHONE_DIRECTORY_READERS,
+)
+def test_phone_directory_readers_share_generated_pagination_behavior(
+    client: ZoomClient,
+    monkeypatch: pytest.MonkeyPatch,
+    method_path: str,
+    operation_id: str,
+    endpoint_path: str,
+    collection_key: str,
+    filter_name: str,
+    filter_value: Any,
+) -> None:
+    """Pin the four Pythonic readers to one generated pagination runtime."""
+
+    method = _resolve_member(client, method_path)
+    assert isinstance(method, SdkMethod)
+    assert method._operation.operation_id == operation_id
+    assert method._operation.path == endpoint_path
+    assert {
+        parameter.python_name: parameter.original_name
+        for parameter in method._operation.query_parameters
+    }[filter_name] == filter_name
+
+    calls: list[dict[str, Any]] = []
+
+    def fake_request(
+        http_method: str,
+        path: str,
+        *,
+        path_params: Any = None,
+        params: Any = None,
+        json: Any = None,
+        headers: Any = None,
+        timeout: Any = None,
+    ) -> dict[str, Any]:
+        _ = (path_params, json, headers, timeout)
+        assert http_method == "GET"
+        assert path == endpoint_path
+        query = dict(params or {})
+        calls.append(query)
+        if query.get("next_page_token") == "page-2":
+            return {
+                collection_key: [{"id": f"{collection_key}-2"}],
+                "next_page_token": "",
+                "page_size": 2,
+            }
+        return {
+            collection_key: [{"id": f"{collection_key}-1"}],
+            "next_page_token": "page-2",
+            "page_size": 2,
+        }
+
+    monkeypatch.setattr(client, "request", fake_request)
+    kwargs = {"page_size": 2, filter_name: filter_value}
+
+    pages = list(method.paginate(**kwargs))
+    assert len(pages) == 2
+    assert [len(page.items) for page in pages] == [1, 1]
+    assert calls == [
+        {**kwargs},
+        {**kwargs, "next_page_token": "page-2"},
+    ]
+
+    calls.clear()
+    items = list(method.iter_all(**kwargs))
+    assert len(items) == 2
+    assert calls == [
+        {**kwargs},
+        {**kwargs, "next_page_token": "page-2"},
+    ]
+
+
+def test_legacy_common_area_phone_reader_is_not_in_bundled_inventory(
+    client: ZoomClient,
+) -> None:
+    """Keep `/phone/common_areas` as the documented current replacement."""
+
+    operations = client._schemas.iter_operations()
+    assert any(
+        operation.method == "GET" and operation.template_path == "/phone/common_areas"
+        for operation in operations
+    )
+    assert not any(
+        operation.method == "GET"
+        and operation.template_path == "/phone/common_area_phones"
+        for operation in operations
+    )
 
 
 def test_real_schema_sdk_exposes_typed_models_for_common_operations(
