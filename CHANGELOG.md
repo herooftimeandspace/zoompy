@@ -11,6 +11,8 @@ semantic-versioning policy for the public SDK surface.
 - `ZoomClient.request_raw_body(...)` and generated SDK operation
   `.raw_body(...)` helpers for compatibility decoders that need SDK-owned
   transport behavior before application-owned decoding and validation.
+- Focused contract coverage and consumer documentation for the generated Zoom
+  Phone users, common areas, shared line groups, and call queues readers.
 
 ### Changed
 - Successful validated and raw-body responses are now read through a 4 MiB
