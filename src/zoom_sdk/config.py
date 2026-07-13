@@ -25,6 +25,21 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 DEFAULT_BASE_URL = "https://api.zoom.us/v2"
 DEFAULT_OAUTH_URL = "https://zoom.us"
 DEFAULT_TOKEN_SKEW_SECONDS = 60
+ENV_ACCOUNT_ID = "ZOOM_ACCOUNT_ID"
+ENV_CLIENT_ID = "ZOOM_CLIENT_ID"
+ENV_CLIENT_SECRET = "ZOOM_CLIENT_SECRET"
+ENV_BASE_URL = "ZOOM_BASE_URL"
+ENV_OAUTH_URL = "ZOOM_OAUTH_URL"
+ENV_TOKEN_SKEW_SECONDS = "ZOOM_TOKEN_SKEW_SECONDS"
+
+SUPPORTED_RUNTIME_ENVIRONMENT_VARIABLES = (
+    ENV_ACCOUNT_ID,
+    ENV_CLIENT_ID,
+    ENV_CLIENT_SECRET,
+    ENV_BASE_URL,
+    ENV_OAUTH_URL,
+    ENV_TOKEN_SKEW_SECONDS,
+)
 
 
 def _strip_optional_quotes(value: str) -> str:
@@ -157,22 +172,22 @@ class ZoomSettings(BaseModel):
             load_dotenv()
 
         raw_token_skew = os.getenv(
-            "ZOOM_TOKEN_SKEW_SECONDS",
+            ENV_TOKEN_SKEW_SECONDS,
             str(DEFAULT_TOKEN_SKEW_SECONDS),
         )
         try:
             token_skew_seconds = int(raw_token_skew)
         except ValueError as exc:
             raise ValueError(
-                "ZOOM_TOKEN_SKEW_SECONDS must be an integer."
+                f"{ENV_TOKEN_SKEW_SECONDS} must be an integer."
             ) from exc
 
         return cls(
-            account_id=os.getenv("ZOOM_ACCOUNT_ID"),
-            client_id=os.getenv("ZOOM_CLIENT_ID"),
-            client_secret=os.getenv("ZOOM_CLIENT_SECRET"),
-            base_url=os.getenv("ZOOM_BASE_URL", DEFAULT_BASE_URL),
-            oauth_url=os.getenv("ZOOM_OAUTH_URL", DEFAULT_OAUTH_URL),
+            account_id=os.getenv(ENV_ACCOUNT_ID),
+            client_id=os.getenv(ENV_CLIENT_ID),
+            client_secret=os.getenv(ENV_CLIENT_SECRET),
+            base_url=os.getenv(ENV_BASE_URL, DEFAULT_BASE_URL),
+            oauth_url=os.getenv(ENV_OAUTH_URL, DEFAULT_OAUTH_URL),
             token_skew_seconds=token_skew_seconds,
         )
 

@@ -274,6 +274,13 @@ The client reads the following environment variables:
 You may also pass these values directly to `ZoomClient(...)` as constructor
 arguments. Explicit constructor values win over environment values.
 
+This list is the complete Python runtime environment contract. Functional
+parity work from another language SDK should reuse these settings when they
+express the required behavior, use an explicit Python command argument for
+maintenance-only inputs, or require no new configuration at all. Variables for
+another language's compiler, module cache, source checkout, or parity tooling
+are not Python SDK runtime settings and should not be copied into this list.
+
 The default `ZOOM_BASE_URL` is a fallback. When the client still uses
 `https://api.zoom.us/v2`, a matched bundled OpenAPI schema may select a more
 specific server for endpoint groups such as Clips, SCIM, and file uploads.
