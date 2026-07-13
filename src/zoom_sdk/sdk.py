@@ -517,16 +517,9 @@ class SdkMethod:
             )
 
         if explicit_path_params is None:
-            path_params = self._consume_path_parameters(
-                remaining,
-                timeout=timeout,
-            )
+            path_params = self._consume_path_parameters(remaining)
         else:
             path_params = dict(explicit_path_params)
-        path_params = self._populate_pbx_account_id_path_param(
-            path_params,
-            timeout=timeout,
-        )
 
         params: dict[str, Any] | None = None
 
@@ -805,8 +798,6 @@ class SdkMethod:
     def _consume_path_parameters(
         self,
         remaining: dict[str, Any],
-        *,
-        timeout: float | None = None,
     ) -> dict[str, Any] | None:
         """Extract required path parameters from the pending kwargs.
 
@@ -837,14 +828,6 @@ class SdkMethod:
                 continue
 
             if parameter.required:
-                if (
-                    parameter.original_name == "accountId" and
-                    self._operation.path.startswith("/api/v2/pbx/account/{accountId}/")
-                ):
-                    collected[parameter.original_name] = (
-                        self._client._resolve_pbx_account_id(timeout=timeout)
-                    )
-                    continue
                 raise TypeError(
                     f"Missing required path parameter "
                     f"'{parameter.python_name}' for SDK method "
@@ -865,24 +848,6 @@ class SdkMethod:
         if default_account_id is None:
             return _MISSING
         return default_account_id
-
-    def _populate_pbx_account_id_path_param(
-        self,
-        path_params: dict[str, Any] | None,
-        *,
-        timeout: float | None,
-    ) -> dict[str, Any] | None:
-        """Inject PBX account ids when account-scoped paths omit `{accountId}`."""
-
-        if not self._operation.path.startswith("/api/v2/pbx/account/{accountId}/"):
-            return path_params
-
-        populated = dict(path_params or {})
-        if "accountId" in populated:
-            return populated
-
-        populated["accountId"] = self._client._resolve_pbx_account_id(timeout=timeout)
-        return populated
 
     def _split_query_and_body_kwargs(
         self,

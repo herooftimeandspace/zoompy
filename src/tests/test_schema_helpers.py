@@ -105,6 +105,84 @@ def test_path_operation_index_finds_exact_actual_and_regex_matches(tmp_path: Pat
     ) == "https://fallback.example"
 
 
+def test_path_operation_index_supports_sdk_overrides_and_non_zoom_servers(
+    tmp_path: Path,
+) -> None:
+    """Parse `x-sdk` overrides and keep non-Zoom server fallbacks."""
+
+    _write_json(
+        tmp_path / "endpoints" / "custom" / "Custom.json",
+        {
+            "openapi": "3.0.0",
+            "info": {"title": "Custom"},
+            "servers": [
+                {"description": "ignored"},
+                "not-a-mapping",
+                {"url": "https://custom.example.test/root/"},
+            ],
+            "paths": {
+                "/custom/items": {
+                    "get": {
+                        "operationId": "listCustomItems",
+                        "x-sdk": {
+                            "namespace": ["custom", "items"],
+                            "alias": "list",
+                        },
+                        "responses": {"200": {"description": "ok"}},
+                    }
+                }
+            },
+        },
+    )
+
+    index = PathOperationIndex(resource_root=tmp_path, path_root_names=("endpoints",))
+    operation = index.find_operation(
+        method="GET",
+        raw_path="/custom/items",
+        actual_path="/custom/items",
+    )
+
+    assert operation.sdk_namespace == ("custom", "items")
+    assert operation.sdk_alias == "list"
+    assert index.base_url_for_request(
+        method="GET",
+        raw_path="/custom/items",
+        actual_path="/custom/items",
+        fallback="https://fallback.example/",
+    ) == "https://custom.example.test/root"
+
+
+def test_path_operation_index_matches_exact_actual_template_path(
+    tmp_path: Path,
+) -> None:
+    """Prefer a direct actual-path template match before falling back to regex."""
+
+    _write_json(
+        tmp_path / "endpoints" / "custom" / "Exact.json",
+        {
+            "openapi": "3.0.0",
+            "info": {"title": "Exact"},
+            "paths": {
+                "/reports/{reportId}": {
+                    "get": {
+                        "operationId": "getReport",
+                        "responses": {"200": {"description": "ok"}},
+                    }
+                }
+            },
+        },
+    )
+
+    index = PathOperationIndex(resource_root=tmp_path, path_root_names=("endpoints",))
+    operation = index.find_operation(
+        method="GET",
+        raw_path="/reports/today",
+        actual_path="/reports/{reportId}",
+    )
+
+    assert operation.operation_id == "getReport"
+
+
 def test_webhook_registry_rejects_missing_schemas_and_non_json_request_bodies(
     tmp_path: Path,
 ) -> None:

@@ -117,7 +117,6 @@ class ZoomSettings(BaseModel):
     client_id: str | None = Field(default=None)
     client_secret: str | None = Field(default=None)
     base_url: str = Field(default="https://api.zoom.us/v2")
-    pbx_base_url: str = Field(default="https://us01pbx.zoom.us")
     oauth_url: str = Field(default="https://zoom.us")
     token_skew_seconds: int = Field(default=60)
 
@@ -166,7 +165,6 @@ class ZoomSettings(BaseModel):
             client_id=os.getenv("ZOOM_CLIENT_ID"),
             client_secret=os.getenv("ZOOM_CLIENT_SECRET"),
             base_url=os.getenv("ZOOM_BASE_URL", "https://api.zoom.us/v2"),
-            pbx_base_url=os.getenv("ZOOM_PBX_BASE_URL", "https://us01pbx.zoom.us"),
             oauth_url=os.getenv("ZOOM_OAUTH_URL", "https://zoom.us"),
             token_skew_seconds=token_skew_seconds,
         )

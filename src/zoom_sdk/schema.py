@@ -497,7 +497,7 @@ class PathOperationIndex:
         self,
         *,
         resource_root: Any | None = None,
-        path_root_names: tuple[str, ...] = ("endpoints", "master_accounts", "sideloaded"),
+        path_root_names: tuple[str, ...] = ("endpoints", "master_accounts"),
     ) -> None:
         """Load and index bundled path-based operations."""
 
@@ -908,7 +908,7 @@ class SchemaRegistry:
         self,
         *,
         resource_root: Any | None = None,
-        path_root_names: tuple[str, ...] = ("endpoints", "master_accounts", "sideloaded"),
+        path_root_names: tuple[str, ...] = ("endpoints", "master_accounts"),
     ) -> None:
         """Load bundled path-based schemas and prepare validation helpers."""
 

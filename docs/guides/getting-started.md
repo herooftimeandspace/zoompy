@@ -33,7 +33,6 @@ Required environment variables:
 Optional environment variables:
 
 - `ZOOM_BASE_URL`
-- `ZOOM_PBX_BASE_URL`
 - `ZOOM_OAUTH_URL`
 - `ZOOM_TOKEN_SKEW_SECONDS`
 

@@ -56,7 +56,6 @@ class ZoomClient:
         client_id: str | None = None,
         client_secret: str | None = None,
         base_url: str | None = None,
-        pbx_base_url: str | None = None,
         oauth_url: str | None = None,
         token_skew_seconds: int | None = None,
         access_token: str | None = None,
@@ -97,7 +96,6 @@ class ZoomClient:
             client_id=client_id,
             client_secret=client_secret,
             base_url=base_url,
-            pbx_base_url=pbx_base_url,
             oauth_url=oauth_url,
             token_skew_seconds=token_skew_seconds,
         )
@@ -111,8 +109,6 @@ class ZoomClient:
             raise ValueError("timeout must be greater than 0.")
 
         self._base_url = settings.base_url.rstrip("/")
-        self._pbx_base_url = settings.pbx_base_url.rstrip("/")
-        self._pbx_account_id_cache: str | None = None
         self._default_timeout = timeout
         self._max_retries = max_retries
         self._backoff_base_seconds = backoff_base_seconds
@@ -275,15 +271,12 @@ class ZoomClient:
         actual_path = self._render_path(raw_path, path_params)
         request_timeout = timeout if timeout is not None else self._default_timeout
         normalized_method = method.upper()
-        if self._is_pbx_request_path(raw_path, actual_path):
-            base_url = self._pbx_base_url
-        else:
-            base_url = self._schemas.base_url_for_request(
-                method=normalized_method,
-                raw_path=raw_path,
-                actual_path=actual_path,
-                fallback=self._base_url,
-            )
+        base_url = self._schemas.base_url_for_request(
+            method=normalized_method,
+            raw_path=raw_path,
+            actual_path=actual_path,
+            fallback=self._base_url,
+        )
         url = self._build_url(actual_path, base_url=base_url)
         request_headers = self._build_headers(headers, timeout=request_timeout)
 
@@ -415,38 +408,6 @@ class ZoomClient:
 
         normalized_path = path if path.startswith("/") else f"/{path}"
         return f"{base_url.rstrip('/')}{normalized_path}"
-
-    def _is_pbx_request_path(self, raw_path: str, actual_path: str) -> bool:
-        """Return true when the request targets the PBX sideloaded surface."""
-
-        return raw_path.startswith("/api/v2/pbx/") or actual_path.startswith("/api/v2/pbx/")
-
-    def _resolve_pbx_account_id(self, *, timeout: float | None = None) -> str:
-        """Resolve and cache the PBX account id for account-scoped PBX routes."""
-
-        if self._pbx_account_id_cache:
-            return self._pbx_account_id_cache
-
-        payload = self.request(
-            "GET",
-            "/api/v2/pbx/current/account",
-            timeout=timeout,
-        )
-        if not isinstance(payload, Mapping):
-            raise ValueError(
-                "PBX account discovery failed: expected an object response from "
-                "GET /api/v2/pbx/current/account."
-            )
-
-        account_id = payload.get("accountId")
-        if not isinstance(account_id, str) or not account_id.strip():
-            raise ValueError(
-                "PBX account discovery failed: response did not include a non-empty "
-                "'accountId' field."
-            )
-
-        self._pbx_account_id_cache = account_id
-        return account_id
 
     def _build_headers(
         self,

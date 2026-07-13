@@ -52,9 +52,9 @@ def test_packaged_master_account_resources_are_discoverable() -> None:
     assert children is not None
 
 
-def test_packaged_sideloaded_resources_are_available() -> None:
-    """Ensure sideloaded schema files are discoverable as package resources."""
+def test_packaged_sideloaded_resources_are_not_shipped() -> None:
+    """Ensure unsupported sideloaded schema JSON files are not packaged."""
 
     root = resources.files("zoom_sdk") / "sideloaded"
-    files = _iter_json_files(root)
-    assert files
+    files = _iter_json_files(root) if root.is_dir() else []
+    assert not files

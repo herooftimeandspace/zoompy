@@ -43,16 +43,16 @@ def test_zoom_settings_can_skip_local_env_loading(monkeypatch: pytest.MonkeyPatc
     assert settings.account_id is None
 
 
-def test_zoom_settings_reads_pbx_base_url_from_environment(
+def test_zoom_settings_reads_base_url_from_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Load PBX base URL overrides from process environment."""
+    """Load the primary API base URL override from process environment."""
 
-    monkeypatch.setenv("ZOOM_PBX_BASE_URL", "https://pbx.example.test")
+    monkeypatch.setenv("ZOOM_BASE_URL", "https://api.zoom.example/v2")
 
     settings = ZoomSettings.from_environment(load_local_env=False)
 
-    assert settings.pbx_base_url == "https://pbx.example.test"
+    assert settings.base_url == "https://api.zoom.example/v2"
 
 
 def test_strip_optional_quotes_leaves_unquoted_values_unchanged() -> None:

@@ -268,7 +268,6 @@ The client reads the following environment variables:
 - `ZOOM_CLIENT_ID`
 - `ZOOM_CLIENT_SECRET`
 - `ZOOM_BASE_URL` (default fallback: `https://api.zoom.us/v2`)
-- `ZOOM_PBX_BASE_URL` (default: `https://us01pbx.zoom.us`)
 - `ZOOM_OAUTH_URL` (default: `https://zoom.us`)
 - `ZOOM_TOKEN_SKEW_SECONDS` (default: `60`)
 
@@ -281,10 +280,6 @@ client prefers that schema-declared server. This applies to both ordinary
 endpoints and master-account endpoints. It matters for endpoint groups such as
 Clips, SCIM, and file-upload APIs that do not consistently live under the
 default `/v2` server URL.
-
-`ZOOM_PBX_BASE_URL` is used for sideloaded PBX routes under `/api/v2/pbx/**`.
-Those routes are intentionally maintained outside the synced official schema
-trees.
 
 If you already have a bearer token from another system, you can bypass OAuth:
 
@@ -315,7 +310,6 @@ Example:
 ZOOM_ACCOUNT_ID="your_account_id"
 ZOOM_CLIENT_ID="your_client_id"
 ZOOM_CLIENT_SECRET="your_client_secret"
-ZOOM_PBX_BASE_URL="https://us01pbx.zoom.us"
 ```
 
 See [.env.example](./.env.example).
@@ -348,24 +342,6 @@ with ZoomClient() as client:
         user_id="abc123",
         display_name="Ada Lovelace",
     )
-```
-
-PBX sideloaded routes are available under the `pbx` namespace:
-
-```python
-from zoom_sdk import ZoomClient
-
-with ZoomClient() as client:
-    # account_id is auto-discovered via /api/v2/pbx/current/account when omitted
-    device = client.pbx.devices.get(device_id="B7nKxwQmT5eR9uL2cVh8Za")
-    print(device.description)
-
-    updated = client.pbx.devices.update(
-        device_id="B7nKxwQmT5eR9uL2cVh8Za",
-        name="Desk Phone",
-        description="Front office",
-    )
-    print(updated.description)
 ```
 
 Generated SDK methods support a few conventions:
