@@ -63,7 +63,7 @@ jobs:
         uses: actions/configure-pages@v6  # TODO: pin to specific SHA for reproducibility
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3  # TODO: pin to specific SHA for reproducibility
+        uses: actions/upload-pages-artifact@v5  # TODO: pin to specific SHA for reproducibility
         with:
           path: site
 
