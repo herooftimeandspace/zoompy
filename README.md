@@ -687,20 +687,40 @@ Because the docs come from the installed package, repository root markdown
 files, and generated API pages, keeping docstrings and project documents
 accurate is part of the project's public API discipline.
 
-## Recommended Branch Promotion Model
+## Promotion and semantic releases
 
-The repository is designed to work best with a three-branch promotion chain:
+The repository uses an automated three-branch promotion chain:
 
 - `dev` is the default integration branch and the normal base for feature work
 - `staging` receives promotion PRs from `dev`
 - `main` receives promotion PRs from `staging`
 
-The CI workflows are configured so that:
+The workflows enforce these steps:
 
-- pushes and pull requests always run the unit-quality gate
-- integration tests only run for `staging` and `main`, or for pull requests
-  targeting those branches
+- feature and maintenance pull requests target `dev`
+- successful `dev` CI creates or refreshes the `dev -> staging` promotion PR
+- successful `staging` CI creates or refreshes a prepared
+  `promote/staging-to-main -> main` PR
+- the prepared main branch contains both the current `main` and `staging` tips,
+  plus the calculated version update in `pyproject.toml` and
+  `zoom_sdk.__version__`
+- promotion pull requests carry exactly one of `semver:patch`,
+  `semver:minor`, or `semver:major`; the staging-to-main workflow preserves the
+  highest impact across all source pull requests not yet promoted
+- the main promotion reports `unit`, `security`, `integration`, and
+  `release-prep` on the exact prepared head
+- merging the prepared main promotion builds the Python wheel and source
+  distribution, creates the matching `vMAJOR.MINOR.PATCH` tag, and publishes a
+  GitHub Release
 - GitHub Pages only publishes after `main` CI succeeds
+
+The automation uses the repository `GITHUB_TOKEN`. It does not need a personal
+access token. Non-promotion merges to `main` are intentionally ignored by the
+release workflow so bootstrap or administrator repair work cannot accidentally
+publish a package release.
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the exact local gates, semantic
+version rules, required checks, and maintainer bootstrap settings.
 
 ## Response Validation Details
 
