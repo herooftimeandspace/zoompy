@@ -7,7 +7,17 @@ semantic-versioning policy for the public SDK surface.
 
 ## [Unreleased]
 
+### Added
+- `ZoomClient.request_raw_body(...)` and generated SDK operation
+  `.raw_body(...)` helpers for compatibility decoders that need SDK-owned
+  transport behavior before application-owned decoding and validation.
+
 ### Changed
+- Successful validated and raw-body responses are now read through a 4 MiB
+  streaming limit.
+- Non-default `ZOOM_BASE_URL` and `base_url=` values now remain authoritative
+  over schema-declared operation servers, while the default Zoom base URL still
+  permits operation-specific server selection.
 - CI now runs integration tests only for `staging` and `main`, while `dev` and
   ordinary feature work stay on the faster unit-quality path.
 - Documentation publishing now runs from a dedicated `workflow_run` pipeline

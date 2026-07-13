@@ -19,6 +19,7 @@ import httpx
 import pytest
 
 from zoom_sdk import ZoomClient
+from zoom_sdk.client import MAX_RESPONSE_BODY_BYTES
 
 
 class _NoOpSchemaRegistry:
@@ -103,6 +104,21 @@ class _RaisingSchemaRegistry(_NoOpSchemaRegistry):
         raise ValueError("schema mismatch")
 
 
+class _SchemaServerRegistry(_NoOpSchemaRegistry):
+    """Return an operation server that differs from the configured base URL."""
+
+    def base_url_for_request(
+        self,
+        *,
+        method: str,
+        raw_path: str,
+        actual_path: str,
+        fallback: str,
+    ) -> str:
+        _ = (method, raw_path, actual_path, fallback)
+        return "https://schema.zoom.example/v2"
+
+
 def _build_client() -> ZoomClient:
     """Create a client configured for isolated retry tests.
 
@@ -115,6 +131,7 @@ def _build_client() -> ZoomClient:
     return ZoomClient(
         access_token="test-access-token",
         base_url="https://api.zoom.example",
+        load_dotenv=False,
         max_retries=2,
         backoff_base_seconds=0.5,
         backoff_max_seconds=8.0,
@@ -128,6 +145,7 @@ def _build_custom_client(**overrides: Any) -> ZoomClient:
     config: dict[str, Any] = {
         "access_token": "test-access-token",
         "base_url": "https://api.zoom.example",
+        "load_dotenv": False,
     }
     config.update(overrides)
     return ZoomClient(**config)
@@ -168,25 +186,20 @@ def test_request_retries_transport_errors_once_before_success(
     def fake_sleep(seconds: float) -> None:
         sleeps.append(seconds)
 
-    def fake_request(
-        method: str,
-        url: str,
+    def fake_send(
+        request: httpx.Request,
         *,
-        params: Any = None,
-        json: Any = None,
-        headers: Any = None,
-        timeout: Any = None,
+        stream: bool = False,
     ) -> httpx.Response:
-        _ = (params, json, headers, timeout)
+        _ = stream
         nonlocal calls
         calls += 1
-        request = httpx.Request(method, url)
         if calls == 1:
             raise httpx.ConnectError("temporary connect failure", request=request)
         return httpx.Response(200, json={"ok": True}, request=request)
 
     monkeypatch.setattr(time, "sleep", fake_sleep)
-    monkeypatch.setattr(client._http, "request", fake_request)
+    monkeypatch.setattr(client._http, "send", fake_send)
 
     try:
         result = client.request("GET", "/retry-test")
@@ -300,29 +313,24 @@ def test_request_logs_final_transport_failure_after_retries_exhaust(
 
     client = _build_client()
     errors = _capture_log_events(monkeypatch, client)
-    request = httpx.Request("GET", "https://api.zoom.example/transport-failure")
     sleeps: list[float] = []
     attempts = 0
 
     def fake_sleep(seconds: float) -> None:
         sleeps.append(seconds)
 
-    def fake_request(
-        method: str,
-        url: str,
+    def fake_send(
+        request: httpx.Request,
         *,
-        params: Any = None,
-        json: Any = None,
-        headers: Any = None,
-        timeout: Any = None,
+        stream: bool = False,
     ) -> httpx.Response:
-        _ = (params, json, headers, timeout)
+        _ = stream
         nonlocal attempts
         attempts += 1
         raise httpx.ConnectError("still broken", request=request)
 
     monkeypatch.setattr(time, "sleep", fake_sleep)
-    monkeypatch.setattr(client._http, "request", fake_request)
+    monkeypatch.setattr(client._http, "send", fake_send)
 
     try:
         with pytest.raises(httpx.ConnectError):
@@ -523,6 +531,139 @@ def test_request_logs_schema_validation_failures(
         client.close()
 
     assert errors[0]["event"] == "schema_validation_failed"
+
+
+def test_request_honors_explicit_custom_base_url_over_schema_server(
+    respx_mock: Any,
+) -> None:
+    """Treat Python's existing base URL setting as an explicit proxy override."""
+
+    client = _build_custom_client(
+        base_url="https://proxy.zoom.example/v2",
+        schema_registry=_SchemaServerRegistry(),  # type: ignore[arg-type]
+    )
+    route = respx_mock.get("https://proxy.zoom.example/v2/users/me").mock(
+        return_value=httpx.Response(200, json={"id": "123"})
+    )
+
+    try:
+        result = client.request("GET", "/users/me")
+    finally:
+        client.close()
+
+    assert result == {"id": "123"}
+    assert route.called
+
+
+def test_request_uses_schema_server_with_default_base_url(respx_mock: Any) -> None:
+    """Retain operation-specific servers when no custom Python base URL is set."""
+
+    client = ZoomClient(
+        access_token="test-access-token",
+        load_dotenv=False,
+        schema_registry=_SchemaServerRegistry(),  # type: ignore[arg-type]
+    )
+    route = respx_mock.get("https://schema.zoom.example/v2/users/me").mock(
+        return_value=httpx.Response(200, json={"id": "123"})
+    )
+
+    try:
+        result = client.request("GET", "/users/me")
+    finally:
+        client.close()
+
+    assert result == {"id": "123"}
+    assert route.called
+
+
+def test_request_raw_body_preserves_transport_and_skips_schema_validation(
+    respx_mock: Any,
+) -> None:
+    """Return provider bytes while retaining Python SDK request behavior."""
+
+    client = _build_custom_client(
+        base_url="https://proxy.zoom.example/v2",
+        schema_registry=_RaisingSchemaRegistry(),  # type: ignore[arg-type]
+    )
+    route = respx_mock.get(
+        "https://proxy.zoom.example/v2/users/me",
+        params={"include_inactive": "true"},
+        headers={"X-Compatibility-Mode": "safe"},
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            content=b'{"message":"shape changed"}',
+        )
+    )
+
+    try:
+        body = client.request_raw_body(
+            "GET",
+            "/users/{userId}",
+            path_params={"userId": "me"},
+            params={"include_inactive": "true"},
+            headers={"X-Compatibility-Mode": "safe"},
+        )
+    finally:
+        client.close()
+
+    assert body == b'{"message":"shape changed"}'
+    assert route.called
+
+
+def test_request_raw_body_retries_and_returns_empty_bytes_for_no_content(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: Any,
+) -> None:
+    """Use the shared retry policy and represent a 204 response as empty bytes."""
+
+    client = _build_client()
+    sleeps: list[float] = []
+    attempts = 0
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(503, request=request)
+        return httpx.Response(204, request=request)
+
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    respx_mock.get("https://api.zoom.example/raw-retry").mock(side_effect=responder)
+
+    try:
+        body = client.request_raw_body("GET", "/raw-retry")
+    finally:
+        client.close()
+
+    assert body == b""
+    assert attempts == 2
+    assert len(sleeps) == 1
+
+
+@pytest.mark.parametrize("raw_body", [False, True])
+def test_successful_response_bodies_are_bounded(
+    raw_body: bool,
+    respx_mock: Any,
+) -> None:
+    """Reject oversized provider responses on validated and raw-body paths."""
+
+    client = _build_client()
+    respx_mock.get("https://api.zoom.example/oversized").mock(
+        return_value=httpx.Response(
+            200,
+            content=b"x" * (MAX_RESPONSE_BODY_BYTES + 1),
+        )
+    )
+
+    try:
+        with pytest.raises(ValueError, match="Response body exceeds"):
+            if raw_body:
+                client.request_raw_body("GET", "/oversized")
+            else:
+                client.request("GET", "/oversized")
+    finally:
+        client.close()
 
 
 def test_build_headers_preserves_authentication_when_authorization_is_passed() -> None:

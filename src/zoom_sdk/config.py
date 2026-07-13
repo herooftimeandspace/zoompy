@@ -22,6 +22,10 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+DEFAULT_BASE_URL = "https://api.zoom.us/v2"
+DEFAULT_OAUTH_URL = "https://zoom.us"
+DEFAULT_TOKEN_SKEW_SECONDS = 60
+
 
 def _strip_optional_quotes(value: str) -> str:
     """Remove one matching pair of surrounding quotes from a value.
@@ -116,9 +120,9 @@ class ZoomSettings(BaseModel):
     account_id: str | None = Field(default=None)
     client_id: str | None = Field(default=None)
     client_secret: str | None = Field(default=None)
-    base_url: str = Field(default="https://api.zoom.us/v2")
-    oauth_url: str = Field(default="https://zoom.us")
-    token_skew_seconds: int = Field(default=60)
+    base_url: str = Field(default=DEFAULT_BASE_URL)
+    oauth_url: str = Field(default=DEFAULT_OAUTH_URL)
+    token_skew_seconds: int = Field(default=DEFAULT_TOKEN_SKEW_SECONDS)
 
     @field_validator("base_url")
     @classmethod
@@ -152,7 +156,10 @@ class ZoomSettings(BaseModel):
         if load_local_env:
             load_dotenv()
 
-        raw_token_skew = os.getenv("ZOOM_TOKEN_SKEW_SECONDS", "60")
+        raw_token_skew = os.getenv(
+            "ZOOM_TOKEN_SKEW_SECONDS",
+            str(DEFAULT_TOKEN_SKEW_SECONDS),
+        )
         try:
             token_skew_seconds = int(raw_token_skew)
         except ValueError as exc:
@@ -164,8 +171,8 @@ class ZoomSettings(BaseModel):
             account_id=os.getenv("ZOOM_ACCOUNT_ID"),
             client_id=os.getenv("ZOOM_CLIENT_ID"),
             client_secret=os.getenv("ZOOM_CLIENT_SECRET"),
-            base_url=os.getenv("ZOOM_BASE_URL", "https://api.zoom.us/v2"),
-            oauth_url=os.getenv("ZOOM_OAUTH_URL", "https://zoom.us"),
+            base_url=os.getenv("ZOOM_BASE_URL", DEFAULT_BASE_URL),
+            oauth_url=os.getenv("ZOOM_OAUTH_URL", DEFAULT_OAUTH_URL),
             token_skew_seconds=token_skew_seconds,
         )
 

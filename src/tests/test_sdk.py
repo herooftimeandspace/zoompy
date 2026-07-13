@@ -451,6 +451,61 @@ def test_sdk_list_alias_maps_kwargs_to_query_params(
     }
 
 
+def test_sdk_raw_body_method_reuses_pythonic_argument_mapping(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Forward the same Python SDK arguments through the bounded byte path."""
+
+    client = _build_sdk_client(tmp_path)
+    recorded: dict[str, Any] = {}
+
+    def fake_request_raw_body(
+        method: str,
+        path: str,
+        *,
+        path_params: Any = None,
+        params: Any = None,
+        json: Any = None,
+        headers: Any = None,
+        timeout: Any = None,
+    ) -> bytes:
+        recorded.update(
+            {
+                "method": method,
+                "path": path,
+                "path_params": path_params,
+                "params": params,
+                "json": json,
+                "headers": headers,
+                "timeout": timeout,
+            }
+        )
+        return b'{"users":[]}'
+
+    monkeypatch.setattr(client, "request_raw_body", fake_request_raw_body)
+
+    try:
+        result = client.users.list.raw_body(
+            page_size=10,
+            headers={"X-Compatibility-Mode": "safe"},
+            timeout=2.5,
+        )
+    finally:
+        client.close()
+
+    assert result == b'{"users":[]}'
+    assert recorded == {
+        "method": "GET",
+        "path": "/users",
+        "path_params": None,
+        "params": {"page_size": 10},
+        "json": None,
+        "headers": {"X-Compatibility-Mode": "safe"},
+        "timeout": 2.5,
+    }
+
+
 def test_sdk_get_alias_maps_snake_case_path_parameters(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -738,9 +793,11 @@ def test_sdk_account_scoped_methods_preserve_explicit_account_id_precedence(
 
 def test_sdk_account_scoped_methods_still_require_account_id_without_default(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Keep the existing missing-path-parameter failure without a default."""
 
+    monkeypatch.delenv("ZOOM_ACCOUNT_ID", raising=False)
     client = _build_sdk_client(tmp_path)
     try:
         with pytest.raises(TypeError, match="account_id"):
