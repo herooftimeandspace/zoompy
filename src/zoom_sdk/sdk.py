@@ -503,6 +503,29 @@ class SdkMethod:
           `headers=`, and `timeout=`
         """
 
+        return self._client.request(
+            self._operation.http_method,
+            self._operation.path,
+            **self._prepare_request_arguments(kwargs),
+        )
+
+    def raw_body(self, **kwargs: Any) -> bytes:
+        """Return bounded provider bytes without response-schema validation.
+
+        Authentication, retries, timeouts, URL selection, request headers, and
+        structured logging remain owned by the SDK. The caller must decode and
+        validate the returned bytes before accepting provider data.
+        """
+
+        return self._client.request_raw_body(
+            self._operation.http_method,
+            self._operation.path,
+            **self._prepare_request_arguments(kwargs),
+        )
+
+    def _prepare_request_arguments(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:
+        """Normalize one SDK invocation for validated or raw-body transport."""
+
         remaining = dict(kwargs)
         explicit_path_params = remaining.pop("path_params", None)
         explicit_params = remaining.pop("params", None)
@@ -558,15 +581,13 @@ class SdkMethod:
                 value=json_payload,
             )
 
-        return self._client.request(
-            self._operation.http_method,
-            self._operation.path,
-            path_params=path_params,
-            params=params,
-            json=json_payload,
-            headers=headers,
-            timeout=timeout,
-        )
+        return {
+            "path_params": path_params,
+            "params": params,
+            "json": json_payload,
+            "headers": headers,
+            "timeout": timeout,
+        }
 
     def iter_pages(
         self,

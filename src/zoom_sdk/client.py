@@ -8,6 +8,7 @@ On top of that core, the client now exposes a schema-driven SDK surface such as
 
 from __future__ import annotations
 
+import json as json_module
 import random
 import time
 from collections.abc import Mapping
@@ -18,12 +19,13 @@ from urllib.parse import quote
 import httpx
 
 from .auth import OAuthTokenManager
-from .config import ZoomSettings
+from .config import DEFAULT_BASE_URL, ZoomSettings
 from .logging import get_logger
 from .schema import SchemaRegistry, WebhookRegistry
 from .sdk import ZoomSdk
 
 RETRIABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+MAX_RESPONSE_BODY_BYTES = 4 << 20
 RETRIABLE_EXCEPTIONS = (
     httpx.ConnectError,
     httpx.ReadTimeout,
@@ -109,6 +111,7 @@ class ZoomClient:
             raise ValueError("timeout must be greater than 0.")
 
         self._base_url = settings.base_url.rstrip("/")
+        self._uses_custom_base_url = self._base_url != DEFAULT_BASE_URL
         self._default_timeout = timeout
         self._max_retries = max_retries
         self._backoff_base_seconds = backoff_base_seconds
@@ -267,22 +270,79 @@ class ZoomClient:
         automatically from the request path.
         """
 
+        response, body, raw_path, actual_path = self._request_body(
+            method,
+            path,
+            path_params=path_params,
+            params=params,
+            json=json,
+            headers=headers,
+            timeout=timeout,
+        )
+        return self._parse_and_validate_response(
+            response=response,
+            body=body,
+            method=method.upper(),
+            raw_path=raw_path,
+            actual_path=actual_path,
+        )
+
+    def request_raw_body(
+        self,
+        method: str,
+        path: str,
+        *,
+        path_params: Mapping[str, Any] | None = None,
+        params: Mapping[str, Any] | None = None,
+        json: Any | None = None,
+        headers: Mapping[str, str] | None = None,
+        timeout: float | None = None,
+    ) -> bytes:
+        """Execute one Zoom request and return bounded bytes without validation.
+
+        This compatibility escape hatch preserves the normal SDK-owned OAuth,
+        retries, timeouts, URL selection, header handling, and structured logs.
+        Callers become responsible for safely decoding and validating the
+        returned provider payload before using it.
+        """
+
+        _, body, _, _ = self._request_body(
+            method,
+            path,
+            path_params=path_params,
+            params=params,
+            json=json,
+            headers=headers,
+            timeout=timeout,
+        )
+        return body
+
+    def _request_body(
+        self,
+        method: str,
+        path: str,
+        *,
+        path_params: Mapping[str, Any] | None,
+        params: Mapping[str, Any] | None,
+        json: Any | None,
+        headers: Mapping[str, str] | None,
+        timeout: float | None,
+    ) -> tuple[httpx.Response, bytes, str, str]:
+        """Run the shared transport loop and return one bounded success body."""
+
         raw_path = path if path.startswith("/") else f"/{path}"
         actual_path = self._render_path(raw_path, path_params)
         request_timeout = timeout if timeout is not None else self._default_timeout
         normalized_method = method.upper()
-        base_url = self._schemas.base_url_for_request(
+        base_url = self._base_url_for_request(
             method=normalized_method,
             raw_path=raw_path,
             actual_path=actual_path,
-            fallback=self._base_url,
         )
         url = self._build_url(actual_path, base_url=base_url)
         request_headers = self._build_headers(headers, timeout=request_timeout)
 
-        last_response: httpx.Response | None = None
         last_exception: Exception | None = None
-
         for attempt in range(self._max_retries + 1):
             started_at = time.monotonic()
             self._log_request_attempt(
@@ -292,21 +352,20 @@ class ZoomClient:
                 retry_attempt=attempt,
             )
 
+            request = self._http.build_request(
+                normalized_method,
+                url,
+                params=dict(params) if params is not None else None,
+                json=json,
+                headers=request_headers,
+                timeout=request_timeout,
+            )
             try:
-                response = self._http.request(
-                    normalized_method,
-                    url,
-                    params=dict(params) if params is not None else None,
-                    json=json,
-                    headers=request_headers,
-                    timeout=request_timeout,
-                )
-                last_response = response
+                response = self._http.send(request, stream=True)
             except RETRIABLE_EXCEPTIONS as exc:
                 last_exception = exc
                 duration_ms = self._duration_ms(started_at)
-                should_retry = attempt < self._max_retries
-                if should_retry:
+                if attempt < self._max_retries:
                     sleep_seconds = self._calculate_backoff(attempt=attempt)
                     self._log_retry(
                         method=normalized_method,
@@ -350,6 +409,7 @@ class ZoomClient:
                     response=response,
                     attempt=attempt,
                 )
+                response.close()
                 self._log_retry(
                     method=normalized_method,
                     url=url,
@@ -363,21 +423,48 @@ class ZoomClient:
                 time.sleep(sleep_seconds)
                 continue
 
-            response.raise_for_status()
-            return self._parse_and_validate_response(
-                response=response,
-                method=normalized_method,
-                raw_path=raw_path,
-                actual_path=actual_path,
-            )
+            try:
+                response.raise_for_status()
+                body = self._read_bounded_response_body(response)
+            finally:
+                response.close()
+            return response, body, raw_path, actual_path
 
-        # The loop always returns or raises, but keeping this fallback makes the
-        # control flow explicit for readers and type checkers.
-        if last_response is not None:
-            last_response.raise_for_status()
         if last_exception is not None:
             raise last_exception
         raise RuntimeError("Request loop completed without a response or exception.")
+
+    def _base_url_for_request(
+        self,
+        *,
+        method: str,
+        raw_path: str,
+        actual_path: str,
+    ) -> str:
+        """Keep an explicit Python base URL authoritative over schema servers."""
+
+        if self._uses_custom_base_url:
+            return self._base_url
+        return self._schemas.base_url_for_request(
+            method=method,
+            raw_path=raw_path,
+            actual_path=actual_path,
+            fallback=self._base_url,
+        )
+
+    def _read_bounded_response_body(self, response: httpx.Response) -> bytes:
+        """Read decoded response bytes while enforcing the 4 MiB safety limit."""
+
+        chunks: list[bytes] = []
+        total_bytes = 0
+        for chunk in response.iter_bytes():
+            total_bytes += len(chunk)
+            if total_bytes > MAX_RESPONSE_BODY_BYTES:
+                raise ValueError(
+                    f"Response body exceeds {MAX_RESPONSE_BODY_BYTES} byte limit."
+                )
+            chunks.append(chunk)
+        return b"".join(chunks)
 
     def _render_path(
         self,
@@ -441,13 +528,14 @@ class ZoomClient:
         self,
         *,
         response: httpx.Response,
+        body: bytes,
         method: str,
         raw_path: str,
         actual_path: str,
     ) -> dict[str, Any] | list[Any] | None:
         """Parse a successful response body and validate it against the schema."""
 
-        if response.status_code == 204 or not response.content:
+        if response.status_code == 204 or not body:
             self._schemas.validate_response(
                 method=method,
                 raw_path=raw_path,
@@ -458,7 +546,7 @@ class ZoomClient:
             return None
 
         try:
-            payload = response.json()
+            payload = json_module.loads(body)
         except Exception as exc:
             self._logger.error(
                 "Response body was not valid JSON.",

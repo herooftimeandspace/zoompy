@@ -274,12 +274,15 @@ The client reads the following environment variables:
 You may also pass these values directly to `ZoomClient(...)` as constructor
 arguments. Explicit constructor values win over environment values.
 
-`ZOOM_BASE_URL` is the client's fallback base URL. When the matched bundled
-OpenAPI schema declares a more specific server URL for an endpoint family, the
-client prefers that schema-declared server. This applies to both ordinary
-endpoints and master-account endpoints. It matters for endpoint groups such as
-Clips, SCIM, and file-upload APIs that do not consistently live under the
-default `/v2` server URL.
+The default `ZOOM_BASE_URL` is a fallback. When the client still uses
+`https://api.zoom.us/v2`, a matched bundled OpenAPI schema may select a more
+specific server for endpoint groups such as Clips, SCIM, and file uploads.
+
+A non-default `ZOOM_BASE_URL` or `base_url=` constructor argument is an explicit
+runtime override and remains authoritative for every request. This lets Python
+applications route through a staging service, API proxy, or mock server without
+schema metadata silently redirecting the request back to a Zoom production
+host.
 
 If you already have a bearer token from another system, you can bypass OAuth:
 
@@ -353,6 +356,8 @@ Generated SDK methods support a few conventions:
   methods when a simple CRUD alias would be unclear
 - `.raw(...)` is available when you explicitly want plain JSON instead of typed
   objects
+- `.raw_body(...)` is available for compatibility decoders that intentionally
+  need bounded provider bytes before application-owned decoding and validation
 
 ### Typed SDK access
 
@@ -454,6 +459,36 @@ The lower-level model hooks still exist for advanced use and introspection:
 They are no longer the primary interface. They mainly exist for advanced
 callers, tooling, and internal tests. If you want plain validated JSON instead
 of model objects, use `.raw(...)`.
+
+### Bounded raw response bodies
+
+The normal `request(...)` and `.raw(...)` paths remain fail-closed: successful
+JSON is validated against the bundled OpenAPI response schema before it reaches
+application code.
+
+For a temporary provider compatibility decoder, `ZoomClient.request_raw_body(...)`
+and generated operation `.raw_body(...)` return the successful response as
+`bytes` without response-schema validation:
+
+```python
+import json
+
+from zoom_sdk import ZoomClient
+
+with ZoomClient(base_url="https://proxy.example.test/v2") as client:
+    body = client.phone.users.list.raw_body(page_size=100)
+    payload = json.loads(body)
+```
+
+The raw-body path still uses SDK-owned OAuth, retries, timeouts, URL selection,
+request headers, and structured logging. Both validated and raw-body paths
+stream successful responses through a 4 MiB limit. The application is
+responsible for decoding the bytes, rejecting malformed or unexpected shapes,
+and applying any provider-specific normalization before accepting data.
+
+Do not log raw response bodies, OAuth responses, bearer tokens, authorization
+headers, or client secrets. Prefer non-secret identifiers and aggregate counts
+when recording compatibility-decoder diagnostics.
 
 ### Pagination helpers
 
@@ -637,7 +672,8 @@ should fail loudly rather than silently skipping validation.
 - `httpx.HTTPStatusError`
   for non-2xx responses after retry exhaustion
 - `ValueError`
-  for schema validation failures or invalid JSON response bodies
+  for schema validation failures, invalid JSON response bodies, or successful
+  response bodies larger than the 4 MiB safety limit
 
 That split keeps transport/HTTP failures clearly separate from contract
 violations.
@@ -649,7 +685,7 @@ The library is intentionally focused. At the moment it does not:
 - verify Zoom webhook signatures for you
 - generate checked-in, hand-maintained per-endpoint service classes
 - download fresh schemas dynamically at runtime
-- bypass schema validation when an operation is unknown
+- silently bypass schema validation when an operation is unknown
 
 Webhook payload shape validation is supported through
 `ZoomClient.validate_webhook(...)`, but request authenticity checks still belong
