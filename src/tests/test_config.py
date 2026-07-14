@@ -7,11 +7,22 @@ from pathlib import Path
 import pytest
 
 from zoom_sdk.config import (
+    SUPPORTED_RUNTIME_ENVIRONMENT_VARIABLES,
     ZoomSettings,
     _strip_optional_quotes,
     discover_project_root,
     load_dotenv,
 )
+
+
+def _dotenv_keys(path: Path) -> set[str]:
+    """Return assignment names from the repository's example dotenv file."""
+
+    return {
+        line.split("=", 1)[0].strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#") and "=" in line
+    }
 
 
 def test_discover_project_root_falls_back_to_start_path(tmp_path: Path) -> None:
@@ -53,6 +64,42 @@ def test_zoom_settings_reads_base_url_from_environment(
     settings = ZoomSettings.from_environment(load_local_env=False)
 
     assert settings.base_url == "https://api.zoom.example/v2"
+
+
+def test_supported_runtime_environment_contract_is_complete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Load every documented Python runtime variable through one settings model."""
+
+    values = {
+        "ZOOM_ACCOUNT_ID": "account-id",
+        "ZOOM_CLIENT_ID": "client-id",
+        "ZOOM_CLIENT_SECRET": "client-secret",
+        "ZOOM_BASE_URL": "https://proxy.zoom.example/v2",
+        "ZOOM_OAUTH_URL": "https://oauth.zoom.example",
+        "ZOOM_TOKEN_SKEW_SECONDS": "75",
+    }
+    assert set(SUPPORTED_RUNTIME_ENVIRONMENT_VARIABLES) == set(values)
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+
+    settings = ZoomSettings.from_environment(load_local_env=False)
+
+    assert settings.account_id == "account-id"
+    assert settings.client_id == "client-id"
+    assert settings.client_secret == "client-secret"
+    assert settings.base_url == "https://proxy.zoom.example/v2"
+    assert settings.oauth_url == "https://oauth.zoom.example"
+    assert settings.token_skew_seconds == 75
+
+
+def test_example_dotenv_matches_supported_runtime_environment_contract() -> None:
+    """Keep contributor configuration examples aligned with runtime support."""
+
+    project_root = Path(__file__).resolve().parents[2]
+    assert _dotenv_keys(project_root / ".env.example") == set(
+        SUPPORTED_RUNTIME_ENVIRONMENT_VARIABLES
+    )
 
 
 def test_strip_optional_quotes_leaves_unquoted_values_unchanged() -> None:

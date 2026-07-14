@@ -41,6 +41,26 @@ local sync problem. Update `scripts/schema_urls.json` and run:
 ./.venv/bin/python scripts/sync_schemas.py
 ```
 
+## Language-specific configuration boundary
+
+Functional parity across SDK implementations means matching observable API,
+transport, validation, pagination, security, and release behavior. It does not
+mean copying environment-variable names or build controls from another
+language.
+
+The complete Python runtime environment contract is declared by
+`SUPPORTED_RUNTIME_ENVIRONMENT_VARIABLES` in `zoom_sdk.config` and mirrored in
+`.env.example`. Add a runtime variable only when Python application code must
+read it. Prefer an explicit command-line argument for repository maintenance
+tools, and prefer existing `ZoomClient` constructor arguments or
+`ZoomSettings` fields when they already express the behavior.
+
+Do not add compiler settings, module-cache settings, foreign source-checkout
+locations, or another SDK's parity controls to Python runtime code, examples,
+or workflows. When a cross-language change arrives, write down the behavior to
+preserve first and then implement the Pythonic equivalent, which may require no
+new configuration.
+
 ## Tests
 
 The important test layers are:

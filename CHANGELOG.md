@@ -20,6 +20,10 @@ semantic-versioning policy for the public SDK surface.
 - Non-default `ZOOM_BASE_URL` and `base_url=` values now remain authoritative
   over schema-declared operation servers, while the default Zoom base URL still
   permits operation-specific server selection.
+- The six supported Python runtime environment variables now form an explicit,
+  tested configuration contract shared with `.env.example`; cross-language
+  parity guidance now requires behavior ports instead of foreign build or
+  parity variables.
 - CI now runs integration tests only for `staging` and `main`, while `dev` and
   ordinary feature work stay on the faster unit-quality path.
 - Documentation publishing now runs from a dedicated `workflow_run` pipeline
