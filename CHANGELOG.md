@@ -13,6 +13,12 @@ semantic-versioning policy for the public SDK surface.
   transport behavior before application-owned decoding and validation.
 - Focused contract coverage and consumer documentation for the generated Zoom
   Phone users, common areas, shared line groups, and call queues readers.
+- Automated `dev -> staging -> main` promotion pull requests with fail-closed
+  semantic-version label resolution, synchronized Python version metadata,
+  exact-head promotion checks, and GitHub Release creation for wheel and source
+  artifacts.
+- A tested Python release helper for version bumps, source-PR label resolution,
+  unpromoted-range impact aggregation, and synchronized metadata updates.
 
 ### Changed
 - Successful validated and raw-body responses are now read through a 4 MiB
@@ -24,6 +30,9 @@ semantic-versioning policy for the public SDK surface.
   tested configuration contract shared with `.env.example`; cross-language
   parity guidance now requires behavior ports instead of foreign build or
   parity variables.
+- CI now reports dependency auditing as a dedicated `security` check so branch
+  protection and promotion workflows can preserve the same Python quality
+  boundary on exact promotion heads.
 - CI now runs integration tests only for `staging` and `main`, while `dev` and
   ordinary feature work stay on the faster unit-quality path.
 - Documentation publishing now runs from a dedicated `workflow_run` pipeline
