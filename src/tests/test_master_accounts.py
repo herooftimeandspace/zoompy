@@ -5,10 +5,10 @@ specs are still ordinary request/response OpenAPI documents with `paths`, so we
 can reuse the same shared request-contract runner instead of inventing a second
 testing model.
 
-The only real difference is where the schema files live:
+The only real difference is which canonical schema family is exercised:
 
-* ordinary endpoint specs are mirrored under `src/tests/endpoints/**`
-* master-account specs are mirrored under `src/tests/master_accounts/**`
+* ordinary endpoint specs live under `src/zoom_sdk/endpoints/**`
+* master-account specs live under `src/zoom_sdk/master_accounts/**`
 
 Keeping the suite separate makes failures easier to understand. When a Zoom
 product family publishes both ordinary and master-account APIs, we want pytest
@@ -30,6 +30,7 @@ from _path_schema_suite import (
     schema_paths,
     spec_title,
 )
+from _schema_roots import MASTER_ACCOUNT_SCHEMA_ROOT
 
 from _openapi_contract import (
     build_operation_cases,
@@ -38,11 +39,11 @@ from _openapi_contract import (
     validate_response_examples,
 )
 
-MASTER_ACCOUNT_ROOT = Path(__file__).resolve().parent / "master_accounts"
+MASTER_ACCOUNT_ROOT = MASTER_ACCOUNT_SCHEMA_ROOT
 
 
 def _schema_paths() -> list[Path]:
-    """Return the mirrored master-account schema files currently on disk."""
+    """Return the canonical master-account schema files bundled with the package."""
 
     return schema_paths(MASTER_ACCOUNT_ROOT)
 
@@ -101,7 +102,7 @@ def test_master_account_spec_is_openapi_3(
     master_account_spec_path: Path,
     master_account_spec: dict[str, Any],
 ) -> None:
-    """Confirm each mirrored file is a real OpenAPI 3 path document."""
+    """Confirm each canonical file is a real OpenAPI 3 path document."""
 
     assert master_account_spec.get("openapi", "").startswith("3.")
     assert "paths" in master_account_spec
