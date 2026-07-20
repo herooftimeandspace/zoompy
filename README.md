@@ -912,11 +912,19 @@ The sync script matches each downloaded schema to a local file by the schema's
 `info.title`, not by the remote URL basename, so URLs like
 `.../meetings/methods/endpoints.json` still update `Meetings.json`. You can
 also provide `expected_title` in the manifest to make that mapping explicit.
+When a publisher renames a schema but the SDK must preserve an existing public
+namespace, `target_title` records and applies the local compatibility title.
 If a webhook or master-account document uses a different title than its
 ordinary endpoint schema, provide `webhook_expected_title` or
 `master_account_expected_title` in the manifest. Derived webhook and
 master-account URLs that return `404` are treated as optional and do not fail
 the whole sync.
+
+Schemas whose canonical source has been withdrawn belong in the manifest's
+`retained` list with their former URL and the evidence-based reason for keeping
+the last reviewed local copy. The sync validates that each retained title is
+still present locally. Do not mark a required source optional merely to hide a
+download failure.
 
 To only rebuild the test mirror from the canonical package endpoint,
 master-account, and webhook trees, run:

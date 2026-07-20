@@ -48,6 +48,12 @@ semantic-versioning policy for the public SDK surface.
   account-discovery logic. This API surface is unsupported and cannot be
   relied on for stable SDK behavior.
 
+### Fixed
+- Schema refreshes now use Zoom's current Chat publication path while
+  preserving the established Team Chat compatibility title, and explicitly
+  retain the last reviewed Zoom Docs schema after its canonical publication
+  was withdrawn.
+
 ## [1.0.1]
 
 ### Added
