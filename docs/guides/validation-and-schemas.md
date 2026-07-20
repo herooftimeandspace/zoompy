@@ -50,7 +50,9 @@ That script:
 - downloads endpoint schemas from a curated manifest
 - downloads optional webhook and master-account companions
 - updates the canonical runtime trees
-- mirrors them into the test trees used by the contract suites
+
+The contract suites read these canonical package trees directly. The repository
+does not keep duplicate schema copies under `src/tests`.
 
 ## Validation behavior
 

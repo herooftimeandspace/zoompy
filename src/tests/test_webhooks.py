@@ -1,8 +1,8 @@
 """Schema-driven contract tests for the bundled Zoom webhook documents.
 
 The repository already contains broad endpoint contract suites that exercise the
-request side of the Zoom API against `src/tests/endpoints/**`. This module adds
-the parallel coverage for webhook documents stored under `src/tests/webhooks/**`
+request side of the Zoom API against `src/zoom_sdk/endpoints/**`. This module adds
+parallel coverage for webhook documents stored under `src/zoom_sdk/webhooks/**`
 without changing any of the existing endpoint-test logic.
 
 Webhook specs are still OpenAPI documents, but the interesting contract is the
@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from _schema_roots import WEBHOOK_SCHEMA_ROOT
 
 from _openapi_contract import (
     build_webhook_cases,
@@ -33,11 +34,11 @@ from _openapi_contract import (
     validate_webhook_examples,
 )
 
-WEBHOOK_ROOT = Path(__file__).resolve().parent / "webhooks"
+WEBHOOK_ROOT = WEBHOOK_SCHEMA_ROOT
 
 
 def _webhook_spec_paths() -> list[Path]:
-    """Return the webhook schema files currently mirrored into the test tree.
+    """Return the canonical webhook schema files bundled with the package.
 
     We intentionally discover files dynamically so the webhook suite grows
     automatically as `scripts/sync_schemas.py` downloads additional webhook
@@ -65,7 +66,7 @@ def _spec_title(spec: dict[str, Any], path: Path) -> str:
 
 
 def _build_webhook_parametrization() -> tuple[list[Any], list[str]]:
-    """Build pytest parameters and ids for every mirrored webhook event."""
+    """Build pytest parameters and ids for every canonical webhook event."""
 
     parameters: list[Any] = []
     ids: list[str] = []
@@ -81,7 +82,7 @@ def _build_webhook_parametrization() -> tuple[list[Any], list[str]]:
     return parameters, ids
 
 
-# Load each mirrored webhook spec file as its own top-level pytest parameter.
+# Load each canonical webhook spec file as its own top-level pytest parameter.
 @pytest.fixture(params=_webhook_spec_paths(), ids=lambda path: path.stem)
 def webhook_spec_path(request: pytest.FixtureRequest) -> Path:
     """Expose one webhook schema path to the generic tests below."""
@@ -162,7 +163,7 @@ def test_webhook_event_payload_contract(
 
     This test intentionally stays narrow. It does not try to emulate webhook
     delivery infrastructure or a user implementation's handler. Instead, it
-    proves that for every documented webhook event in the mirrored schema tree,
+    proves that for every documented webhook event in the canonical schema tree,
     we can derive one payload that satisfies the exact request-body schema Zoom
     publishes.
     """
