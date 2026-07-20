@@ -209,6 +209,13 @@ Secrets are intentionally never logged:
 - Authorization headers are never logged
 - raw bearer tokens are never logged
 
+Runtime configuration is also validated before the client sends requests:
+
+- `ZOOM_BASE_URL` and `ZOOM_OAUTH_URL` must use `https`
+- URLs with embedded credentials, query strings, or fragments are rejected
+- malformed `ZOOM_TOKEN_SKEW_SECONDS` values fail fast during startup
+- OAuth tokens are only cached when Zoom returns bearer tokens with usable expiry windows
+
 ### Retry and backoff
 
 Retries use the standard library only. The client retries:
@@ -267,12 +274,22 @@ The client reads the following environment variables:
 You may also pass these values directly to `ZoomClient(...)` as constructor
 arguments. Explicit constructor values win over environment values.
 
-`ZOOM_BASE_URL` is the client's fallback base URL. When the matched bundled
-OpenAPI schema declares a more specific server URL for an endpoint family, the
-client prefers that schema-declared server. This applies to both ordinary
-endpoints and master-account endpoints. It matters for endpoint groups such as
-Clips, SCIM, and file-upload APIs that do not consistently live under the
-default `/v2` server URL.
+This list is the complete Python runtime environment contract. Functional
+parity work from another language SDK should reuse these settings when they
+express the required behavior, use an explicit Python command argument for
+maintenance-only inputs, or require no new configuration at all. Variables for
+another language's compiler, module cache, source checkout, or parity tooling
+are not Python SDK runtime settings and should not be copied into this list.
+
+The default `ZOOM_BASE_URL` is a fallback. When the client still uses
+`https://api.zoom.us/v2`, a matched bundled OpenAPI schema may select a more
+specific server for endpoint groups such as Clips, SCIM, and file uploads.
+
+A non-default `ZOOM_BASE_URL` or `base_url=` constructor argument is an explicit
+runtime override and remains authoritative for every request. This lets Python
+applications route through a staging service, API proxy, or mock server without
+schema metadata silently redirecting the request back to a Zoom production
+host.
 
 If you already have a bearer token from another system, you can bypass OAuth:
 
@@ -346,6 +363,57 @@ Generated SDK methods support a few conventions:
   methods when a simple CRUD alias would be unclear
 - `.raw(...)` is available when you explicitly want plain JSON instead of typed
   objects
+- `.raw_body(...)` is available for compatibility decoders that intentionally
+  need bounded provider bytes before application-owned decoding and validation
+
+### Zoom Phone directory readers
+
+The bundled schema inventory exposes the current read-only Zoom Phone directory
+families through the normal Python attribute-chain API. Python does not need a
+separate `PhoneDirectory` wrapper or a handwritten options type because method
+names, query parameters, response models, and pagination behavior are generated
+from the same OpenAPI operations as the rest of the SDK.
+
+| Python method | Zoom API endpoint |
+| --- | --- |
+| `client.phone.users.list(...)` | `GET /phone/users` |
+| `client.phone.common_areas.list(...)` | `GET /phone/common_areas` |
+| `client.phone.shared_line_groups.list(...)` | `GET /phone/shared_line_groups` |
+| `client.phone.call_queues.list(...)` | `GET /phone/call_queues` |
+
+All four methods use the shared `iter_pages(...)`, `paginate(...)`, and
+`iter_all(...)` helpers. Query arguments remain Pythonic and schema-derived;
+for example, `department=`, `cost_center=`, and `common_area_device_type=` are
+only available when the matched operation publishes them.
+
+```python
+from zoom_sdk import ZoomClient
+
+with ZoomClient() as client:
+    for user in client.phone.users.list.iter_all(
+        page_size=100,
+        department="Technology",
+    ):
+        process_user(user)
+
+    for page in client.phone.common_areas.list.paginate(
+        page_size=100,
+        common_area_device_type=2,
+    ):
+        process_common_areas(page.items)
+```
+
+The older `GET /phone/common_area_phones` shape is not present in the bundled
+Zoom OpenAPI inventory. The supported current replacement is
+`GET /phone/common_areas`, exposed as `client.phone.common_areas.list(...)`.
+If a future schema sync publishes a legacy operation, the generated inventory
+and its golden contract will make that addition explicit rather than silently
+guessing at an undocumented endpoint.
+
+Directory methods return provider-derived data. Do not log raw response
+payloads, authorization headers, bearer tokens, client secrets, or OAuth
+responses. Log only the non-secret identifiers and aggregate counts required
+for the consuming workflow.
 
 ### Typed SDK access
 
@@ -447,6 +515,36 @@ The lower-level model hooks still exist for advanced use and introspection:
 They are no longer the primary interface. They mainly exist for advanced
 callers, tooling, and internal tests. If you want plain validated JSON instead
 of model objects, use `.raw(...)`.
+
+### Bounded raw response bodies
+
+The normal `request(...)` and `.raw(...)` paths remain fail-closed: successful
+JSON is validated against the bundled OpenAPI response schema before it reaches
+application code.
+
+For a temporary provider compatibility decoder, `ZoomClient.request_raw_body(...)`
+and generated operation `.raw_body(...)` return the successful response as
+`bytes` without response-schema validation:
+
+```python
+import json
+
+from zoom_sdk import ZoomClient
+
+with ZoomClient(base_url="https://proxy.example.test/v2") as client:
+    body = client.phone.users.list.raw_body(page_size=100)
+    payload = json.loads(body)
+```
+
+The raw-body path still uses SDK-owned OAuth, retries, timeouts, URL selection,
+request headers, and structured logging. Both validated and raw-body paths
+stream successful responses through a 4 MiB limit. The application is
+responsible for decoding the bytes, rejecting malformed or unexpected shapes,
+and applying any provider-specific normalization before accepting data.
+
+Do not log raw response bodies, OAuth responses, bearer tokens, authorization
+headers, or client secrets. Prefer non-secret identifiers and aggregate counts
+when recording compatibility-decoder diagnostics.
 
 ### Pagination helpers
 
@@ -589,20 +687,40 @@ Because the docs come from the installed package, repository root markdown
 files, and generated API pages, keeping docstrings and project documents
 accurate is part of the project's public API discipline.
 
-## Recommended Branch Promotion Model
+## Promotion and semantic releases
 
-The repository is designed to work best with a three-branch promotion chain:
+The repository uses an automated three-branch promotion chain:
 
 - `dev` is the default integration branch and the normal base for feature work
 - `staging` receives promotion PRs from `dev`
 - `main` receives promotion PRs from `staging`
 
-The CI workflows are configured so that:
+The workflows enforce these steps:
 
-- pushes and pull requests always run the unit-quality gate
-- integration tests only run for `staging` and `main`, or for pull requests
-  targeting those branches
+- feature and maintenance pull requests target `dev`
+- successful `dev` CI creates or refreshes the `dev -> staging` promotion PR
+- successful `staging` CI creates or refreshes a prepared
+  `promote/staging-to-main -> main` PR
+- the prepared main branch contains both the current `main` and `staging` tips,
+  plus the calculated version update in `pyproject.toml` and
+  `zoom_sdk.__version__`
+- promotion pull requests carry exactly one of `semver:patch`,
+  `semver:minor`, or `semver:major`; the staging-to-main workflow preserves the
+  highest impact across all source pull requests not yet promoted
+- the main promotion reports `unit`, `security`, `integration`, and
+  `release-prep` on the exact prepared head
+- merging the prepared main promotion builds the Python wheel and source
+  distribution, creates the matching `vMAJOR.MINOR.PATCH` tag, and publishes a
+  GitHub Release
 - GitHub Pages only publishes after `main` CI succeeds
+
+The automation uses the repository `GITHUB_TOKEN`. It does not need a personal
+access token. Non-promotion merges to `main` are intentionally ignored by the
+release workflow so bootstrap or administrator repair work cannot accidentally
+publish a package release.
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the exact local gates, semantic
+version rules, required checks, and maintainer bootstrap settings.
 
 ## Response Validation Details
 
@@ -630,7 +748,8 @@ should fail loudly rather than silently skipping validation.
 - `httpx.HTTPStatusError`
   for non-2xx responses after retry exhaustion
 - `ValueError`
-  for schema validation failures or invalid JSON response bodies
+  for schema validation failures, invalid JSON response bodies, or successful
+  response bodies larger than the 4 MiB safety limit
 
 That split keeps transport/HTTP failures clearly separate from contract
 violations.
@@ -642,7 +761,7 @@ The library is intentionally focused. At the moment it does not:
 - verify Zoom webhook signatures for you
 - generate checked-in, hand-maintained per-endpoint service classes
 - download fresh schemas dynamically at runtime
-- bypass schema validation when an operation is unknown
+- silently bypass schema validation when an operation is unknown
 
 Webhook payload shape validation is supported through
 `ZoomClient.validate_webhook(...)`, but request authenticity checks still belong
@@ -708,7 +827,8 @@ request:
 - `ruff check .`
 - `mypy src _openapi_contract.py`
 - `python -m build`
-- `pytest -m "not integration"`
+- `pip-audit`
+- `pytest -m "not integration"` with a hard `--cov-fail-under=95` gate
 - documentation-site assembly with `scripts/build_docs.py`
 - `mkdocs build --strict`
 

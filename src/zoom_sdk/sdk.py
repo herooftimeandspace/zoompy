@@ -503,6 +503,29 @@ class SdkMethod:
           `headers=`, and `timeout=`
         """
 
+        return self._client.request(
+            self._operation.http_method,
+            self._operation.path,
+            **self._prepare_request_arguments(kwargs),
+        )
+
+    def raw_body(self, **kwargs: Any) -> bytes:
+        """Return bounded provider bytes without response-schema validation.
+
+        Authentication, retries, timeouts, URL selection, request headers, and
+        structured logging remain owned by the SDK. The caller must decode and
+        validate the returned bytes before accepting provider data.
+        """
+
+        return self._client.request_raw_body(
+            self._operation.http_method,
+            self._operation.path,
+            **self._prepare_request_arguments(kwargs),
+        )
+
+    def _prepare_request_arguments(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:
+        """Normalize one SDK invocation for validated or raw-body transport."""
+
         remaining = dict(kwargs)
         explicit_path_params = remaining.pop("path_params", None)
         explicit_params = remaining.pop("params", None)
@@ -558,15 +581,13 @@ class SdkMethod:
                 value=json_payload,
             )
 
-        return self._client.request(
-            self._operation.http_method,
-            self._operation.path,
-            path_params=path_params,
-            params=params,
-            json=json_payload,
-            headers=headers,
-            timeout=timeout,
-        )
+        return {
+            "path_params": path_params,
+            "params": params,
+            "json": json_payload,
+            "headers": headers,
+            "timeout": timeout,
+        }
 
     def iter_pages(
         self,
@@ -822,6 +843,11 @@ class SdkMethod:
                 )
                 continue
 
+            default_value = self._default_path_parameter_value(parameter)
+            if default_value is not _MISSING:
+                collected[parameter.original_name] = default_value
+                continue
+
             if parameter.required:
                 raise TypeError(
                     f"Missing required path parameter "
@@ -830,6 +856,19 @@ class SdkMethod:
                 )
 
         return collected or None
+
+    def _default_path_parameter_value(self, parameter: SdkParameter) -> Any:
+        """Return a client-level fallback for supported omitted path params."""
+
+        if not parameter.required:
+            return _MISSING
+        if parameter.original_name != "accountId" and parameter.python_name != "account_id":
+            return _MISSING
+
+        default_account_id = self._client.default_account_id
+        if default_account_id is None:
+            return _MISSING
+        return default_account_id
 
     def _split_query_and_body_kwargs(
         self,
@@ -1180,14 +1219,17 @@ class ZoomSdk:
         """Convert one raw indexed operation into SDK metadata."""
 
         path_parameters, query_parameters = _extract_parameters(operation)
-        namespace = _namespace_from_path(operation.template_path)
+        namespace = operation.sdk_namespace or _namespace_from_path(
+            operation.template_path
+        )
+        primary_alias = operation.sdk_alias or _heuristic_alias(
+            method=operation.method,
+            path=operation.template_path,
+        )
         return SdkOperation(
             namespace=namespace,
             operation_name=_identifier(operation.operation_id),
-            alias_name=_heuristic_alias(
-                method=operation.method,
-                path=operation.template_path,
-            ),
+            alias_name=primary_alias,
             http_method=operation.method,
             path=operation.template_path,
             path_parameters=path_parameters,
@@ -1201,10 +1243,7 @@ class ZoomSdk:
             semantic_aliases=_semantic_aliases(
                 namespace=namespace,
                 operation_id=operation.operation_id,
-                primary_alias=_heuristic_alias(
-                    method=operation.method,
-                    path=operation.template_path,
-                ),
+                primary_alias=primary_alias,
             ),
         )
 

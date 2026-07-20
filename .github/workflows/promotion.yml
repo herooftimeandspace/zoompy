@@ -1,0 +1,317 @@
+name: Promotion
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+  checks: write
+  pull-requests: write
+
+jobs:
+  promote-dev-to-staging:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'dev'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact dev head
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install integration dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Create or refresh dev to staging promotion PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          GH_SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+
+          git fetch origin staging
+          resolved_label="$(python scripts/release_tools.py resolve-promotion-semver \
+            --repo "${GH_REPO}" \
+            --sha "${GH_SHA}" \
+            --base-ref dev)"
+          existing_pr="$(gh pr list --repo "${GH_REPO}" --base staging --head dev --state open --json number --jq '.[0].number')"
+          title="Promote dev to staging"
+          body="$(printf '%s\n' \
+            'Automated promotion PR from dev to staging.' \
+            '' \
+            "Source commit: ${GH_SHA}" \
+            "Source workflow: ${GH_URL}" \
+            '' \
+            'The unit and security checks come from the authoritative dev push for this exact commit.' \
+            'The promotion workflow reports the live integration check on the same commit.' \
+            'This workflow uses the repository GITHUB_TOKEN; no personal access token is required.')"
+
+          if [ -z "${existing_pr}" ] && [ "$(git rev-list --count origin/staging..HEAD)" = "0" ]; then
+            echo "No commits between staging and dev; skipping promotion PR."
+            exit 0
+          fi
+
+          if [ -z "${existing_pr}" ]; then
+            gh pr create \
+              --repo "${GH_REPO}" \
+              --base staging \
+              --head dev \
+              --title "${title}" \
+              --body "${body}" \
+              --label "${resolved_label}"
+            existing_pr="$(gh pr list --repo "${GH_REPO}" --base staging --head dev --state open --json number --jq '.[0].number')"
+          else
+            gh pr edit "${existing_pr}" --repo "${GH_REPO}" --title "${title}" --body "${body}"
+            for label in semver:patch semver:minor semver:major; do
+              if [ "${label}" != "${resolved_label}" ]; then
+                gh pr edit "${existing_pr}" --repo "${GH_REPO}" --remove-label "${label}" >/dev/null 2>&1 || true
+              fi
+            done
+            gh pr edit "${existing_pr}" --repo "${GH_REPO}" --add-label "${resolved_label}"
+          fi
+          echo "promotion_pr=${existing_pr}" >> "${GITHUB_ENV}"
+
+      - name: Run and report staging integration check
+        if: env.promotion_pr != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          GH_SHA: ${{ github.event.workflow_run.head_sha }}
+          ZOOM_ACCOUNT_ID: ${{ secrets.ZOOM_ACCOUNT_ID }}
+          ZOOM_CLIENT_ID: ${{ secrets.ZOOM_CLIENT_ID }}
+          ZOOM_CLIENT_SECRET: ${{ secrets.ZOOM_CLIENT_SECRET }}
+          ZOOM_BASE_URL: ${{ secrets.ZOOM_BASE_URL }}
+          ZOOM_OAUTH_URL: ${{ secrets.ZOOM_OAUTH_URL }}
+          ZOOM_TOKEN_SKEW_SECONDS: ${{ secrets.ZOOM_TOKEN_SKEW_SECONDS }}
+        run: |
+          set -euo pipefail
+
+          started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          check_id="$(gh api --method POST "repos/${GH_REPO}/check-runs" \
+            -f 'name=integration' \
+            -f "head_sha=${GH_SHA}" \
+            -f 'status=in_progress' \
+            -f "started_at=${started_at}" \
+            --jq '.id')"
+          conclusion="success"
+          log_file="$(mktemp)"
+          if ! python -m pytest -m integration >"${log_file}" 2>&1; then
+            conclusion="failure"
+          fi
+          completed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          gh api --method PATCH "repos/${GH_REPO}/check-runs/${check_id}" \
+            -f 'status=completed' \
+            -f "conclusion=${conclusion}" \
+            -f "completed_at=${completed_at}" \
+            -f 'output[title]=integration' \
+            -f "output[summary]=Promotion workflow reported integration with conclusion ${conclusion}." \
+            -f "output[text]=$(tail -c 60000 "${log_file}")" >/dev/null
+          cat "${log_file}"
+          [ "${conclusion}" = "success" ]
+
+  promote-staging-to-main:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'staging'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Prepare versioned staging to main branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          GH_SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_URL: ${{ github.event.workflow_run.html_url }}
+          GH_PROMOTION_REF: promote/staging-to-main
+        run: |
+          set -euo pipefail
+
+          git fetch origin main staging
+          resolved_label="$(python scripts/release_tools.py resolve-promotion-range-semver \
+            --repo "${GH_REPO}" \
+            --base origin/main \
+            --head "${GH_SHA}" \
+            --source-base-ref dev)"
+          if [ "$(git rev-list --count origin/main.."${GH_SHA}")" = "0" ]; then
+            echo "No commits between main and staging; skipping promotion PR."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "${GH_PROMOTION_REF}" origin/main
+          git merge --no-ff --no-edit "${GH_SHA}"
+
+          current_version="$(git show origin/main:pyproject.toml | python scripts/release_tools.py read-version --pyproject -)"
+          desired_version="$(python scripts/release_tools.py bump \
+            --part "${resolved_label#semver:}" \
+            --current-version "${current_version}")"
+          python scripts/release_tools.py set-version --version "${desired_version}"
+          git add pyproject.toml src/zoom_sdk/__init__.py
+          git commit -m "Prepare v${desired_version}"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GH_REPO}.git" \
+            "HEAD:refs/heads/${GH_PROMOTION_REF}" \
+            --force
+
+          existing_pr="$(gh pr list --repo "${GH_REPO}" --base main --head "${GH_PROMOTION_REF}" --state open --json number --jq '.[0].number')"
+          title="Promote staging to main as v${desired_version}"
+          body="$(printf '%s\n' \
+            'Automated versioned promotion PR from staging to main.' \
+            '' \
+            "Source commit: ${GH_SHA}" \
+            "Prepared version: v${desired_version}" \
+            "Source workflow: ${GH_URL}" \
+            '' \
+            'This PR must carry exactly one release label: semver:patch, semver:minor, or semver:major.' \
+            'After merge, the release workflow builds Python wheel and source artifacts and creates the matching tag and GitHub Release.' \
+            'Required checks are reported by this workflow on the exact prepared merge head.' \
+            'This workflow uses the repository GITHUB_TOKEN; no personal access token is required.')"
+
+          if [ -z "${existing_pr}" ]; then
+            gh pr create \
+              --repo "${GH_REPO}" \
+              --base main \
+              --head "${GH_PROMOTION_REF}" \
+              --title "${title}" \
+              --body "${body}" \
+              --label "${resolved_label}"
+          else
+            gh pr edit "${existing_pr}" --repo "${GH_REPO}" --title "${title}" --body "${body}"
+            for label in semver:patch semver:minor semver:major; do
+              if [ "${label}" != "${resolved_label}" ]; then
+                gh pr edit "${existing_pr}" --repo "${GH_REPO}" --remove-label "${label}" >/dev/null 2>&1 || true
+              fi
+            done
+            gh pr edit "${existing_pr}" --repo "${GH_REPO}" --add-label "${resolved_label}"
+          fi
+
+      - name: Install promotion check dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+          pip install build pip-audit
+
+      - name: Run and report exact-head promotion checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          GH_PROMOTION_REF: promote/staging-to-main
+          ZOOM_ACCOUNT_ID: ${{ secrets.ZOOM_ACCOUNT_ID }}
+          ZOOM_CLIENT_ID: ${{ secrets.ZOOM_CLIENT_ID }}
+          ZOOM_CLIENT_SECRET: ${{ secrets.ZOOM_CLIENT_SECRET }}
+          ZOOM_BASE_URL: ${{ secrets.ZOOM_BASE_URL }}
+          ZOOM_OAUTH_URL: ${{ secrets.ZOOM_OAUTH_URL }}
+          ZOOM_TOKEN_SKEW_SECONDS: ${{ secrets.ZOOM_TOKEN_SKEW_SECONDS }}
+        run: |
+          set -euo pipefail
+
+          promotion_pr="$(gh pr list --repo "${GH_REPO}" --base main --head "${GH_PROMOTION_REF}" --state open --json number --jq '.[0].number')"
+          if [ -z "${promotion_pr}" ]; then
+            echo "No open staging to main promotion PR found; skipping checks."
+            exit 0
+          fi
+          export promotion_pr
+          git fetch origin main staging "${GH_PROMOTION_REF}"
+          git checkout "origin/${GH_PROMOTION_REF}"
+          promotion_sha="$(git rev-parse HEAD)"
+
+          run_reported_check() {
+            local name="$1"
+            local script="$2"
+            local log_file
+            local check_id
+            local started_at
+            local completed_at
+            local conclusion="success"
+
+            log_file="$(mktemp)"
+            started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            check_id="$(gh api --method POST "repos/${GH_REPO}/check-runs" \
+              -f "name=${name}" \
+              -f "head_sha=${promotion_sha}" \
+              -f 'status=in_progress' \
+              -f "started_at=${started_at}" \
+              --jq '.id')"
+            if ! bash -eo pipefail -c "${script}" >"${log_file}" 2>&1; then
+              conclusion="failure"
+            fi
+            completed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            gh api --method PATCH "repos/${GH_REPO}/check-runs/${check_id}" \
+              -f 'status=completed' \
+              -f "conclusion=${conclusion}" \
+              -f "completed_at=${completed_at}" \
+              -f "output[title]=${name}" \
+              -f "output[summary]=Promotion workflow reported ${name} with conclusion ${conclusion}." \
+              -f "output[text]=$(tail -c 60000 "${log_file}")" >/dev/null
+            cat "${log_file}"
+            rm -f "${log_file}"
+            [ "${conclusion}" = "success" ]
+          }
+
+          unit_script='
+          set -euo pipefail
+          python -m ruff check .
+          python -m mypy src _openapi_contract.py scripts/release_tools.py
+          python -m build
+          python scripts/build_docs.py
+          python -m mkdocs build --strict
+          python -m pytest -m "not integration" --cov=zoom_sdk --cov-report=term --cov-fail-under=95
+          '
+          security_script='
+          set -euo pipefail
+          python -m pip_audit --cache-dir .cache/pip-audit
+          '
+          integration_script='
+          set -euo pipefail
+          python -m pytest -m integration
+          '
+          release_prep_script='
+          set -euo pipefail
+          labels="$(gh pr view "${promotion_pr}" --repo "${GH_REPO}" --json labels --jq ".labels[].name")"
+          semver_labels="$(printf "%s\n" "${labels}" | grep "^semver:" || true)"
+          semver_count="$(printf "%s\n" "${semver_labels}" | sed "/^$/d" | wc -l | tr -d " ")"
+          if [ "${semver_count}" != "1" ]; then
+            echo "Expected exactly one semver label on PR #${promotion_pr}; found ${semver_count}."
+            exit 1
+          fi
+          git fetch origin main staging
+          git merge-base --is-ancestor origin/staging HEAD
+          git merge-base --is-ancestor origin/main HEAD
+          current_version="$(git show origin/main:pyproject.toml | python scripts/release_tools.py read-version --pyproject -)"
+          desired_version="$(python scripts/release_tools.py bump --part "${semver_labels#semver:}" --current-version "${current_version}")"
+          project_version="$(python scripts/release_tools.py read-version)"
+          package_version="$(python -c "import zoom_sdk; print(zoom_sdk.__version__)")"
+          test "${project_version}" = "${desired_version}"
+          test "${package_version}" = "${desired_version}"
+          echo "Promotion branch is prepared for v${desired_version}."
+          '
+
+          failures=0
+          run_reported_check unit "${unit_script}" || failures=1
+          run_reported_check security "${security_script}" || failures=1
+          run_reported_check integration "${integration_script}" || failures=1
+          run_reported_check release-prep "${release_prep_script}" || failures=1
+          if [ "${failures}" != "0" ]; then
+            echo "One or more promotion-owned checks failed."
+            exit 1
+          fi
