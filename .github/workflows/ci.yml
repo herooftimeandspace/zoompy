@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7  # TODO: pin to specific SHA for reproducibility
 
-      - uses: actions/setup-python@v6  # TODO: pin to specific SHA for reproducibility
+      - uses: actions/setup-python@v7  # TODO: pin to specific SHA for reproducibility
         with:
           python-version: "3.14"
 
@@ -57,7 +57,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7  # TODO: pin to specific SHA for reproducibility
 
-      - uses: actions/setup-python@v6  # TODO: pin to specific SHA for reproducibility
+      - uses: actions/setup-python@v7  # TODO: pin to specific SHA for reproducibility
         with:
           python-version: "3.14"
 
@@ -128,7 +128,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7  # TODO: pin to specific SHA for reproducibility
 
-      - uses: actions/setup-python@v6  # TODO: pin to specific SHA for reproducibility
+      - uses: actions/setup-python@v7  # TODO: pin to specific SHA for reproducibility
         with:
           python-version: "3.14"
 
@@ -162,7 +162,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7  # TODO: pin to specific SHA for reproducibility
 
-      - uses: actions/setup-python@v6  # TODO: pin to specific SHA for reproducibility
+      - uses: actions/setup-python@v7  # TODO: pin to specific SHA for reproducibility
         with:
           python-version: "3.14"
 
