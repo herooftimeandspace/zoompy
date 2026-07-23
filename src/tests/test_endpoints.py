@@ -1,7 +1,7 @@
 """Generic schema-driven contract tests for all bundled endpoint documents.
 
 This module replaces the earlier pattern of one near-identical test file per
-OpenAPI schema under `src/tests/endpoints/**`. The actual endpoint contract logic
+OpenAPI schema under `src/zoom_sdk/endpoints/**`. The actual endpoint contract logic
 is unchanged: we still load the real schema file, discover operations, generate
 request/response examples, mock the outbound HTTP call with `respx`, and route
 everything through the production `ZoomClient.request` method via pytest
@@ -32,6 +32,7 @@ from _path_schema_suite import (
     schema_paths,
     spec_title,
 )
+from _schema_roots import ENDPOINT_SCHEMA_ROOT
 
 from _openapi_contract import (
     build_operation_cases,
@@ -40,11 +41,11 @@ from _openapi_contract import (
     validate_response_examples,
 )
 
-SCHEMA_ROOT = Path(__file__).resolve().parent / "endpoints"
+SCHEMA_ROOT = ENDPOINT_SCHEMA_ROOT
 
 
 def _schema_paths() -> list[Path]:
-    """Return the endpoint schema files mirrored into the test tree."""
+    """Return the canonical endpoint schema files bundled with the package."""
 
     return schema_paths(SCHEMA_ROOT)
 

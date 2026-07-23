@@ -4,7 +4,7 @@ Both `test_endpoints.py` and `test_master_accounts.py` exercise ordinary
 OpenAPI `paths` documents through the same shared contract runner. The only
 real differences are:
 
-* where the mirrored schema files live
+* which canonical schema family they exercise
 * which label should appear in failure messages
 
 This helper keeps those suites parallel without forcing each module to repeat
@@ -34,7 +34,7 @@ REQUEST_HEADERS_OVERRIDES = {
 
 
 def schema_paths(root: Path) -> list[Path]:
-    """Return the mirrored JSON schema files under one suite root."""
+    """Return the canonical JSON schema files under one suite root."""
 
     return sorted(root.rglob("*.json"))
 
