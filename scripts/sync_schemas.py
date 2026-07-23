@@ -72,14 +72,38 @@ class SchemaSource:
     The remote URL basename is intentionally not used to decide the local output
     filename. Some Zoom URLs end in generic names such as `endpoints.json`,
     while the downloaded document itself identifies as `Meetings`, `Users`, and
-    so on. Local overwrite targets are resolved by schema title instead.
+    so on. ``expected_title`` validates the publisher's identity before a
+    document can be accepted. ``target_title`` is the title stored in the local
+    document after any deliberate compatibility rename. ``mapping_title`` is
+    used only to select the endpoint-owned relative path for companion schemas
+    whose own stored title differs from the endpoint title. Keeping storage and
+    path-mapping titles separate prevents a webhook or master-account title from
+    being corrupted merely to locate its existing file.
     """
 
     url: str
     expected_title: str | None = None
     target_title: str | None = None
+    mapping_title: str | None = None
     schema_kind: str = "endpoint"
     optional: bool = False
+
+
+@dataclass(frozen=True)
+class RetainedSchema:
+    """One local schema kept because no canonical refresh source is published."""
+
+    title: str
+    former_url: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class SchemaManifest:
+    """Validated schema refresh sources and intentional local retentions."""
+
+    sources: tuple[SchemaSource, ...]
+    retained: tuple[RetainedSchema, ...]
 
 
 def parse_args() -> argparse.Namespace:
@@ -135,7 +159,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_manifest(path: Path) -> list[SchemaSource]:
+def load_manifest(path: Path) -> SchemaManifest:
     """Load the schema URL manifest.
 
     The manifest format is intentionally small and human-editable:
@@ -154,13 +178,28 @@ def load_manifest(path: Path) -> list[SchemaSource]:
           "webhook_expected_title": "Zoom Revenue Accelerator Webhooks",
           "master_account_expected_title": "Revenue Accelerator"
         }
+      ],
+      "retained": [
+        {
+          "title": "Zoom Docs",
+          "former_url": "https://example.invalid/retired.json",
+          "reason": "The publisher no longer lists or serves this schema."
+        }
       ]
     }
     ```
 
     Plain string entries are supported for convenience. Object entries let you
     state the title you expect the remote schema to declare, which is useful
-    when the URL path itself does not resemble the local filename.
+    when the URL path itself does not resemble the local filename. When Zoom
+    changes a published title but the SDK must keep its existing compatibility
+    name, ``target_title`` records that deliberate local title normalization.
+
+    The optional ``retained`` list records schemas that must remain checked in
+    even though their former canonical URL is no longer published. Retention is
+    explicit rather than treating an arbitrary required download failure as
+    optional; each retained entry must name an existing local schema and explain
+    why it cannot currently be refreshed.
 
     Each manifest entry implicitly represents three downloads:
 
@@ -189,6 +228,7 @@ def load_manifest(path: Path) -> list[SchemaSource]:
         if isinstance(entry, dict):
             url = entry.get("url")
             expected_title = entry.get("expected_title")
+            target_title = entry.get("target_title")
             webhook_expected_title = entry.get("webhook_expected_title")
             master_account_expected_title = entry.get(
                 "master_account_expected_title"
@@ -201,12 +241,35 @@ def load_manifest(path: Path) -> list[SchemaSource]:
                 raise SystemExit(
                     f"'expected_title' must be a string when provided: {entry!r}",
                 )
+            if isinstance(expected_title, str) and not expected_title.strip():
+                raise SystemExit(
+                    f"'expected_title' must be non-empty when provided: {entry!r}",
+                )
+            if target_title is not None and (
+                not isinstance(target_title, str) or not target_title.strip()
+            ):
+                raise SystemExit(
+                    f"'target_title' must be a non-empty string when provided: {entry!r}",
+                )
+            if target_title is not None and expected_title is None:
+                raise SystemExit(
+                    "'target_title' requires 'expected_title' so the published "
+                    f"schema is validated before retitling: {entry!r}",
+                )
             if (
                 webhook_expected_title is not None and
                 not isinstance(webhook_expected_title, str)
             ):
                 raise SystemExit(
                     f"'webhook_expected_title' must be a string when provided: {entry!r}",
+                )
+            if (
+                isinstance(webhook_expected_title, str)
+                and not webhook_expected_title.strip()
+            ):
+                raise SystemExit(
+                    "'webhook_expected_title' must be non-empty when provided: "
+                    f"{entry!r}",
                 )
             if (
                 master_account_expected_title is not None and
@@ -216,10 +279,24 @@ def load_manifest(path: Path) -> list[SchemaSource]:
                     "'master_account_expected_title' must be a string when "
                     f"provided: {entry!r}",
                 )
+            if (
+                isinstance(master_account_expected_title, str)
+                and not master_account_expected_title.strip()
+            ):
+                raise SystemExit(
+                    "'master_account_expected_title' must be non-empty when "
+                    f"provided: {entry!r}",
+                )
             endpoint_source = SchemaSource(
                 url=url.strip(),
                 expected_title=expected_title.strip() if isinstance(expected_title, str) else None,
-                target_title=expected_title.strip() if isinstance(expected_title, str) else None,
+                target_title=(
+                    target_title.strip()
+                    if isinstance(target_title, str)
+                    else expected_title.strip()
+                    if isinstance(expected_title, str)
+                    else None
+                ),
             )
             sources.extend(
                 expand_schema_sources(
@@ -241,7 +318,40 @@ def load_manifest(path: Path) -> list[SchemaSource]:
         raise SystemExit(
             f"Schema manifest contains no URLs to download: {path}",
         )
-    return sources
+
+    retained_entries = payload.get("retained", [])
+    if not isinstance(retained_entries, list):
+        raise SystemExit(
+            f"Schema manifest 'retained' value must be a list: {path}",
+        )
+    retained: list[RetainedSchema] = []
+    for entry in retained_entries:
+        if not isinstance(entry, dict):
+            raise SystemExit(f"Retained schema entry must be an object: {entry!r}")
+        title = entry.get("title")
+        former_url = entry.get("former_url")
+        reason = entry.get("reason")
+        if (
+            not isinstance(title, str)
+            or not title.strip()
+            or not isinstance(former_url, str)
+            or not former_url.strip()
+            or not isinstance(reason, str)
+            or not reason.strip()
+        ):
+            raise SystemExit(
+                "Retained schema entries require non-empty 'title', "
+                f"'former_url', and 'reason' strings: {entry!r}",
+            )
+        retained.append(
+            RetainedSchema(
+                title=title.strip(),
+                former_url=former_url.strip(),
+                reason=reason.strip(),
+            )
+        )
+
+    return SchemaManifest(sources=tuple(sources), retained=tuple(retained))
 
 
 def expand_schema_sources(
@@ -261,7 +371,10 @@ def expand_schema_sources(
             SchemaSource(
                 url=webhook_url,
                 expected_title=webhook_expected_title or endpoint_source.expected_title,
-                target_title=endpoint_source.target_title,
+                target_title=(
+                    webhook_expected_title or endpoint_source.target_title
+                ),
+                mapping_title=endpoint_source.target_title,
                 schema_kind="webhook",
                 optional=True,
             )
@@ -276,7 +389,10 @@ def expand_schema_sources(
                 expected_title=(
                     master_account_expected_title or endpoint_source.expected_title
                 ),
-                target_title=endpoint_source.target_title,
+                target_title=(
+                    master_account_expected_title or endpoint_source.target_title
+                ),
+                mapping_title=endpoint_source.target_title,
                 schema_kind="master_account",
                 optional=True,
             )
@@ -398,11 +514,31 @@ def download_openapi_specs(
                 source.expected_title,
                 title,
             )
+            failures.append(
+                DownloadFailure(
+                    url=source.url,
+                    expected_title=source.expected_title,
+                    reason=(
+                        f"expected title {source.expected_title!r}, got {title!r}"
+                    ),
+                )
+            )
+            continue
+
+        if source.target_title and title != source.target_title:
+            LOGGER.info(
+                "Normalizing published schema title for local compatibility: "
+                "url=%s published=%r local=%r",
+                source.url,
+                title,
+                source.target_title,
+            )
+            payload["info"]["title"] = source.target_title
 
         downloaded.append(
             DownloadedSchema(
                 url=source.url,
-                title=source.target_title or title,
+                title=source.mapping_title or source.target_title or title,
                 payload=payload,
                 schema_kind=source.schema_kind,
             )
@@ -427,6 +563,28 @@ def build_local_title_map(canonical_root: Path) -> dict[str, Path]:
         if isinstance(title, str) and title:
             title_map[title] = schema_path
     return title_map
+
+
+def validate_retained_schemas(
+    canonical_root: Path,
+    retained: tuple[RetainedSchema, ...],
+) -> None:
+    """Fail closed if an intentionally retained schema is no longer local."""
+
+    title_map = build_local_title_map(canonical_root)
+    for schema in retained:
+        target = title_map.get(schema.title)
+        if target is None:
+            raise SystemExit(
+                f"Retained schema {schema.title!r} is missing from {canonical_root}",
+            )
+        LOGGER.info(
+            "Retaining local schema %r at %s; former_url=%s reason=%s",
+            schema.title,
+            target,
+            schema.former_url,
+            schema.reason,
+        )
 
 
 def build_related_target_map(
@@ -539,8 +697,12 @@ def main() -> int:
     unmatched = 0
     failures: list[DownloadFailure] = []
 
-    sources = load_manifest(args.manifest.resolve())
-    downloaded_specs, failures = download_openapi_specs(sources, args.timeout)
+    manifest = load_manifest(args.manifest.resolve())
+    validate_retained_schemas(canonical_root, manifest.retained)
+    downloaded_specs, failures = download_openapi_specs(
+        list(manifest.sources),
+        args.timeout,
+    )
     LOGGER.info(
         "Downloaded %s OpenAPI-like JSON documents",
         len(downloaded_specs),

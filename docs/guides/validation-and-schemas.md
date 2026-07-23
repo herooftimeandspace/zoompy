@@ -49,6 +49,11 @@ That script:
 
 - downloads endpoint schemas from a curated manifest
 - downloads optional webhook and master-account companions
+- preserves renamed SDK contracts through explicit `target_title` mappings
+- validates the published `expected_title` before applying a compatibility
+  title and preserves explicit companion-schema titles
+- validates intentionally retained local schemas whose upstream publication
+  has ended
 - updates the canonical runtime trees
 
 The contract suites read these canonical package trees directly. The repository
