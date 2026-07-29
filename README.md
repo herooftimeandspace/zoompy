@@ -141,24 +141,22 @@ successful JSON response is validated against the matching schema operation and
 status code.
 
 `src/zoom_sdk/endpoints` is the canonical ordinary endpoint schema tree. The
-repository also keeps a mirrored copy under `src/tests/endpoints` because the
-existing contract tests load schema files directly by path.
+contract tests read these bundled files directly, so the runtime and tests use
+one checked-in source of truth.
 
 Master-account OpenAPI documents are synced separately under
-`src/zoom_sdk/master_accounts` and mirrored to `src/tests/master_accounts`.
-They remain outside the ordinary endpoint tree so the repository can keep a
-clean one-to-one mirror of Zoom's product-family layout without colliding with
-ordinary endpoint filenames.
+`src/zoom_sdk/master_accounts`.
+They remain outside the ordinary endpoint tree so the repository can keep the
+same product-family layout without colliding with ordinary endpoint filenames.
 
-Webhook OpenAPI documents are synced separately under `src/zoom_sdk/webhooks`
-and mirrored to `src/tests/webhooks`. They are stored outside the path-based
+Webhook OpenAPI documents are synced separately under `src/zoom_sdk/webhooks`.
+They are stored outside the path-based
 API trees because webhook specs use the OpenAPI `webhooks` section rather than
 `paths`, so they should not be mixed into the client's response-validation
 registry.
 
 Use `scripts/sync_schemas.py` to refresh endpoint, master-account, and webhook
-documents from a manually curated URL list and mirror them into the test tree
-in one step.
+documents from a manually curated URL list into these canonical trees.
 
 Those webhook schemas now serve both the repository's contract suites and the
 runtime webhook validator exposed by `ZoomClient.validate_webhook(...)`.
@@ -896,8 +894,8 @@ This repository uses multiple layers of testing:
 3. integration smoke test under `src/tests/integration`
    This verifies real token acquisition when credentials are available.
 
-To refresh schemas from the URLs listed in `scripts/schema_urls.json` and then
-mirror the canonical tree into the test tree, run:
+To refresh the canonical schemas from the URLs listed in
+`scripts/schema_urls.json`, run:
 
 ```bash
 ./.venv/bin/python scripts/sync_schemas.py
@@ -912,18 +910,25 @@ The sync script matches each downloaded schema to a local file by the schema's
 `info.title`, not by the remote URL basename, so URLs like
 `.../meetings/methods/endpoints.json` still update `Meetings.json`. You can
 also provide `expected_title` in the manifest to make that mapping explicit.
+When a publisher renames a schema but the SDK must preserve an existing public
+namespace, `target_title` records and applies the local compatibility title.
 If a webhook or master-account document uses a different title than its
 ordinary endpoint schema, provide `webhook_expected_title` or
 `master_account_expected_title` in the manifest. Derived webhook and
 master-account URLs that return `404` are treated as optional and do not fail
 the whole sync.
 
-To only rebuild the test mirror from the canonical package endpoint,
-master-account, and webhook trees, run:
+Schemas whose canonical source has been withdrawn belong in the manifest's
+`retained` list with their former URL and the evidence-based reason for keeping
+the last reviewed local copy. The sync validates that each retained title is
+still present locally. Do not mark a required source optional merely to hide a
+download failure.
 
-```bash
-./.venv/bin/python scripts/sync_schemas.py --mirror-only
-```
+Compatibility retitling requires both `expected_title` and `target_title`.
+The sync rejects a downloaded document whose published title does not match
+`expected_title` before applying the local compatibility title. Explicit
+webhook and master-account titles remain unchanged rather than inheriting an
+endpoint-only compatibility rename.
 
 The contract tests are the main source of behavioral confidence. The
 integration smoke test exists to confirm that the live OAuth path still works.

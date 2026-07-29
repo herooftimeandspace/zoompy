@@ -1,6 +1,6 @@
 """Generic runtime webhook validation tests for the production client API.
 
-The existing webhook suite proves that the mirrored webhook documents are
+The existing webhook suite proves that the canonical webhook documents are
 internally coherent and that our helper layer can synthesize payload examples
 for every documented event. This companion module closes the remaining gap by
 feeding those same example payloads through the real runtime webhook validator
@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from _schema_roots import WEBHOOK_SCHEMA_ROOT
 
 from _openapi_contract import (
     build_webhook_cases,
@@ -28,17 +29,17 @@ from _openapi_contract import (
 )
 from zoom_sdk import WebhookRegistry, ZoomClient
 
-WEBHOOK_ROOT = Path(__file__).resolve().parent / "webhooks"
+WEBHOOK_ROOT = WEBHOOK_SCHEMA_ROOT
 
 
 def _webhook_spec_paths() -> list[Path]:
-    """Return the mirrored webhook schema files used by the generic suite."""
+    """Return the canonical webhook schema files used by the generic suite."""
 
     return sorted(WEBHOOK_ROOT.rglob("*.json"))
 
 
 def _load_spec(path: Path) -> dict[str, Any]:
-    """Load one mirrored webhook document and require a usable title."""
+    """Load one canonical webhook document and require a usable title."""
 
     spec = load_openapi_spec(path)
     title = spec.get("info", {}).get("title")
