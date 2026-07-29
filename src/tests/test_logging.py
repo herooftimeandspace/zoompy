@@ -41,6 +41,7 @@ def test_json_formatter_emits_expected_fields_and_omits_none() -> None:
     record.event = "request_attempt"
     record.method = "GET"
     record.path = "/users"
+    record.token_expires_at = "1970-01-01T00:00:00+00:00"
 
     payload = json.loads(formatter.format(record))
 
@@ -49,6 +50,7 @@ def test_json_formatter_emits_expected_fields_and_omits_none() -> None:
     assert payload["event"] == "request_attempt"
     assert payload["method"] == "GET"
     assert payload["path"] == "/users"
+    assert payload["token_expires_at"] == "1970-01-01T00:00:00+00:00"
     assert "status_code" not in payload
     assert "timestamp" in payload
 

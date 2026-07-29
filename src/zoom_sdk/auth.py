@@ -11,7 +11,7 @@ import time
 from datetime import UTC, datetime
 
 import httpx
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from .logging import get_logger
 
@@ -24,6 +24,21 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str
     expires_in: int
+
+    @field_validator("token_type")
+    @classmethod
+    def validate_token_type(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized != "bearer":
+            raise ValueError("Zoom OAuth token_type must be bearer.")
+        return normalized
+
+    @field_validator("expires_in")
+    @classmethod
+    def validate_expires_in(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("expires_in must be greater than 0.")
+        return value
 
 
 class OAuthTokenManager:
@@ -81,9 +96,7 @@ class OAuthTokenManager:
 
             token_response = self._fetch_token(timeout=timeout)
             self._cached_token = token_response.access_token
-            self._expires_at_epoch = (
-                time.time() + token_response.expires_in - self._token_skew_seconds
-            )
+            self._expires_at_epoch = self._compute_expiry_epoch(token_response.expires_in)
 
             expires_at_iso = datetime.fromtimestamp(
                 self._expires_at_epoch,
@@ -107,6 +120,16 @@ class OAuthTokenManager:
                 },
             )
             return self._cached_token
+
+    def _compute_expiry_epoch(self, expires_in: int) -> float:
+        """Compute a usable token expiry timestamp from the OAuth response."""
+
+        expires_at = time.time() + expires_in - self._token_skew_seconds
+        if expires_at <= time.time():
+            raise ValueError(
+                "Zoom OAuth token expires too soon after applying token_skew_seconds."
+            )
+        return expires_at
 
     def _has_valid_cached_token(self) -> bool:
         """Return true when a non-expired cached token is available."""

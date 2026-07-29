@@ -118,16 +118,20 @@
       "expected_title": "Tasks"
     },
     {
-      "url": "https://developers.zoom.us/api-hub/team-chat/methods/endpoints.json",
-      "expected_title": "Team Chat"
+      "url": "https://developers.zoom.us/api-hub/chat/methods/endpoints.json",
+      "expected_title": "Chat",
+      "target_title": "Team Chat"
     },
     {
       "url": "https://developers.zoom.us/api-hub/whiteboard/methods/endpoints.json",
       "expected_title": "Whiteboard"
-    },
+    }
+  ],
+  "retained": [
     {
-      "url": "https://developers.zoom.us/api-hub/zoom-docs/methods/endpoints.json",
-      "expected_title": "Zoom Docs"
+      "title": "Zoom Docs",
+      "former_url": "https://developers.zoom.us/api-hub/zoom-docs/methods/endpoints.json",
+      "reason": "Zoom no longer lists Zoom Docs in its official API reference or publishes this schema URL; retain the last reviewed schema until a replacement or removal is reviewed."
     }
   ]
 }

@@ -32,7 +32,11 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
-def _build_sdk_client(tmp_path: Path) -> ZoomClient:
+def _build_sdk_client(
+    tmp_path: Path,
+    *,
+    account_id: str | None = None,
+) -> ZoomClient:
     """Create a client backed by a tiny schema tree tailored for SDK tests.
 
     The schema includes the classic collection/detail pattern that most callers
@@ -42,6 +46,8 @@ def _build_sdk_client(tmp_path: Path) -> ZoomClient:
     * `POST /users` -> `client.users.create(...)`
     * `GET /users/{userId}` -> `client.users.get(...)`
     * `GET /phone/users/{userId}` -> `client.phone.users.get(...)`
+    * `GET /accounts/{accountId}/phone/common_areas` ->
+      `client.accounts.account_id.phone.common_areas.list(...)`
     """
 
     _write_json(
@@ -278,12 +284,103 @@ def _build_sdk_client(tmp_path: Path) -> ZoomClient:
                         },
                     }
                 },
+                "/accounts/{accountId}/phone/common_areas": {
+                    "get": {
+                        "operationId": "listCommonAreas",
+                        "summary": "List common areas",
+                        "parameters": [
+                            {
+                                "name": "accountId",
+                                "in": "path",
+                                "required": True,
+                                "description": "The account identifier.",
+                                "schema": {"type": "string"},
+                            },
+                            {
+                                "name": "page_size",
+                                "in": "query",
+                                "required": False,
+                                "description": "Maximum number of common areas to return.",
+                                "schema": {"type": "integer"},
+                            },
+                        ],
+                        "responses": {
+                            "200": {
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "commonAreas": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "object",
+                                                        "properties": {
+                                                            "commonAreaId": {
+                                                                "type": "string"
+                                                            }
+                                                        },
+                                                        "required": [
+                                                            "commonAreaId"
+                                                        ],
+                                                    },
+                                                }
+                                            },
+                                            "required": ["commonAreas"],
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                    }
+                },
+                "/accounts/{accountId}/phone/common_areas/{commonAreaId}": {
+                    "get": {
+                        "operationId": "getCommonArea",
+                        "summary": "Get common area",
+                        "parameters": [
+                            {
+                                "name": "accountId",
+                                "in": "path",
+                                "required": True,
+                                "description": "The account identifier.",
+                                "schema": {"type": "string"},
+                            },
+                            {
+                                "name": "commonAreaId",
+                                "in": "path",
+                                "required": True,
+                                "description": "The common area identifier.",
+                                "schema": {"type": "string"},
+                            },
+                        ],
+                        "responses": {
+                            "200": {
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "commonAreaId": {
+                                                    "type": "string"
+                                                }
+                                            },
+                                            "required": ["commonAreaId"],
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                    }
+                },
             },
         },
     )
 
     return ZoomClient(
+        account_id=account_id,
         access_token="test-access-token",
+        load_dotenv=False,
         schema_registry=SchemaRegistry(resource_root=tmp_path),
     )
 
@@ -351,6 +448,61 @@ def test_sdk_list_alias_maps_kwargs_to_query_params(
         "json": None,
         "headers": None,
         "timeout": None,
+    }
+
+
+def test_sdk_raw_body_method_reuses_pythonic_argument_mapping(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Forward the same Python SDK arguments through the bounded byte path."""
+
+    client = _build_sdk_client(tmp_path)
+    recorded: dict[str, Any] = {}
+
+    def fake_request_raw_body(
+        method: str,
+        path: str,
+        *,
+        path_params: Any = None,
+        params: Any = None,
+        json: Any = None,
+        headers: Any = None,
+        timeout: Any = None,
+    ) -> bytes:
+        recorded.update(
+            {
+                "method": method,
+                "path": path,
+                "path_params": path_params,
+                "params": params,
+                "json": json,
+                "headers": headers,
+                "timeout": timeout,
+            }
+        )
+        return b'{"users":[]}'
+
+    monkeypatch.setattr(client, "request_raw_body", fake_request_raw_body)
+
+    try:
+        result = client.users.list.raw_body(
+            page_size=10,
+            headers={"X-Compatibility-Mode": "safe"},
+            timeout=2.5,
+        )
+    finally:
+        client.close()
+
+    assert result == b'{"users":[]}'
+    assert recorded == {
+        "method": "GET",
+        "path": "/users",
+        "path_params": None,
+        "params": {"page_size": 10},
+        "json": None,
+        "headers": {"X-Compatibility-Mode": "safe"},
+        "timeout": 2.5,
     }
 
 
@@ -472,6 +624,184 @@ def test_sdk_requires_missing_path_parameters_explicitly(
     try:
         with pytest.raises(TypeError, match="user_id"):
             client.users.get()
+    finally:
+        client.close()
+
+
+def test_sdk_account_scoped_list_uses_client_default_account_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fill missing account-scoped list path params from the client default."""
+
+    client = _build_sdk_client(tmp_path, account_id="acct-123")
+    recorded: dict[str, Any] = {}
+
+    def fake_request(
+        method: str,
+        path: str,
+        *,
+        path_params: Any = None,
+        params: Any = None,
+        json: Any = None,
+        headers: Any = None,
+        timeout: Any = None,
+    ) -> dict[str, bool]:
+        recorded.update(
+            {
+                "method": method,
+                "path": path,
+                "path_params": path_params,
+                "params": params,
+                "json": json,
+                "headers": headers,
+                "timeout": timeout,
+            }
+        )
+        return {"ok": True}
+
+    monkeypatch.setattr(client, "request", fake_request)
+
+    try:
+        result = client.accounts.account_id.phone.common_areas.list.raw(page_size=100)
+    finally:
+        client.close()
+
+    assert client.default_account_id == "acct-123"
+    assert result == {"ok": True}
+    assert recorded == {
+        "method": "GET",
+        "path": "/accounts/{accountId}/phone/common_areas",
+        "path_params": {"accountId": "acct-123"},
+        "params": {"page_size": 100},
+        "json": None,
+        "headers": None,
+        "timeout": None,
+    }
+
+
+def test_sdk_account_scoped_detail_uses_client_default_account_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fill omitted account ids for account-scoped detail calls as well."""
+
+    client = _build_sdk_client(tmp_path, account_id="acct-123")
+    recorded: dict[str, Any] = {}
+
+    def fake_request(
+        method: str,
+        path: str,
+        *,
+        path_params: Any = None,
+        params: Any = None,
+        json: Any = None,
+        headers: Any = None,
+        timeout: Any = None,
+    ) -> dict[str, bool]:
+        recorded.update(
+            {
+                "method": method,
+                "path": path,
+                "path_params": path_params,
+                "params": params,
+                "json": json,
+                "headers": headers,
+                "timeout": timeout,
+            }
+        )
+        return {"ok": True}
+
+    monkeypatch.setattr(client, "request", fake_request)
+
+    try:
+        result = client.accounts.account_id.phone.common_areas.get.raw(
+            common_area_id="ca-1"
+        )
+    finally:
+        client.close()
+
+    assert result == {"ok": True}
+    assert recorded == {
+        "method": "GET",
+        "path": "/accounts/{accountId}/phone/common_areas/{commonAreaId}",
+        "path_params": {"accountId": "acct-123", "commonAreaId": "ca-1"},
+        "params": None,
+        "json": None,
+        "headers": None,
+        "timeout": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("override_kwargs", "expected_path_params"),
+    [
+        ({"account_id": "acct-999"}, {"accountId": "acct-999"}),
+        ({"accountId": "acct-998"}, {"accountId": "acct-998"}),
+        ({"path_params": {"accountId": "acct-997"}}, {"accountId": "acct-997"}),
+    ],
+)
+def test_sdk_account_scoped_methods_preserve_explicit_account_id_precedence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    override_kwargs: dict[str, Any],
+    expected_path_params: dict[str, str],
+) -> None:
+    """Keep explicit caller-provided account ids ahead of client defaults."""
+
+    client = _build_sdk_client(tmp_path, account_id="acct-123")
+    recorded: dict[str, Any] = {}
+
+    def fake_request(
+        method: str,
+        path: str,
+        *,
+        path_params: Any = None,
+        params: Any = None,
+        json: Any = None,
+        headers: Any = None,
+        timeout: Any = None,
+    ) -> dict[str, bool]:
+        recorded.update(
+            {
+                "method": method,
+                "path": path,
+                "path_params": path_params,
+                "params": params,
+            }
+        )
+        return {"ok": True}
+
+    monkeypatch.setattr(client, "request", fake_request)
+
+    try:
+        result = client.accounts.account_id.phone.common_areas.list.raw(
+            page_size=100,
+            **override_kwargs,
+        )
+    finally:
+        client.close()
+
+    assert result == {"ok": True}
+    assert recorded == {
+        "method": "GET",
+        "path": "/accounts/{accountId}/phone/common_areas",
+        "path_params": expected_path_params,
+        "params": {"page_size": 100},
+    }
+
+
+def test_sdk_account_scoped_methods_still_require_account_id_without_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep the existing missing-path-parameter failure without a default."""
+
+    monkeypatch.delenv("ZOOM_ACCOUNT_ID", raising=False)
+    client = _build_sdk_client(tmp_path)
+    try:
+        with pytest.raises(TypeError, match="account_id"):
+            client.accounts.account_id.phone.common_areas.list.raw(page_size=100)
     finally:
         client.close()
 

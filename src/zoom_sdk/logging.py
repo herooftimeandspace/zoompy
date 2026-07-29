@@ -49,6 +49,7 @@ class JsonLogFormatter(logging.Formatter):
             "retry_attempt": getattr(record, "retry_attempt", None),
             "error_type": getattr(record, "error_type", None),
             "error_message": getattr(record, "error_message", None),
+            "token_expires_at": getattr(record, "token_expires_at", None),
         }
 
         if record.exc_info:
