@@ -49,6 +49,10 @@ semantic-versioning policy for the public SDK surface.
   relied on for stable SDK behavior.
 
 ### Fixed
+- Staging-to-main promotion checks now keep Zoom credentials out of unit,
+  security, and release-preparation commands, while the live integration check
+  treats unconfigured optional Zoom settings as absent instead of injecting
+  empty runtime values.
 - Schema refreshes now use Zoom's current Chat publication path while
   preserving the established Team Chat compatibility title, and explicitly
   retain the last reviewed Zoom Docs schema after its canonical publication
