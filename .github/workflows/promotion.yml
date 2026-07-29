@@ -211,17 +211,12 @@ jobs:
           pip install -e .
           pip install build pip-audit
 
-      - name: Run and report exact-head promotion checks
+      - name: Run and report exact-head non-integration promotion checks
+        id: non_integration_checks
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           GH_PROMOTION_REF: promote/staging-to-main
-          ZOOM_ACCOUNT_ID: ${{ secrets.ZOOM_ACCOUNT_ID }}
-          ZOOM_CLIENT_ID: ${{ secrets.ZOOM_CLIENT_ID }}
-          ZOOM_CLIENT_SECRET: ${{ secrets.ZOOM_CLIENT_SECRET }}
-          ZOOM_BASE_URL: ${{ secrets.ZOOM_BASE_URL }}
-          ZOOM_OAUTH_URL: ${{ secrets.ZOOM_OAUTH_URL }}
-          ZOOM_TOKEN_SKEW_SECONDS: ${{ secrets.ZOOM_TOKEN_SKEW_SECONDS }}
         run: |
           set -euo pipefail
 
@@ -234,6 +229,7 @@ jobs:
           git fetch origin main staging "${GH_PROMOTION_REF}"
           git checkout "origin/${GH_PROMOTION_REF}"
           promotion_sha="$(git rev-parse HEAD)"
+          echo "promotion_sha=${promotion_sha}" >> "${GITHUB_OUTPUT}"
 
           run_reported_check() {
             local name="$1"
@@ -281,10 +277,6 @@ jobs:
           set -euo pipefail
           python -m pip_audit --cache-dir .cache/pip-audit
           '
-          integration_script='
-          set -euo pipefail
-          python -m pytest -m integration
-          '
           release_prep_script='
           set -euo pipefail
           labels="$(gh pr view "${promotion_pr}" --repo "${GH_REPO}" --json labels --jq ".labels[].name")"
@@ -309,9 +301,59 @@ jobs:
           failures=0
           run_reported_check unit "${unit_script}" || failures=1
           run_reported_check security "${security_script}" || failures=1
-          run_reported_check integration "${integration_script}" || failures=1
           run_reported_check release-prep "${release_prep_script}" || failures=1
           if [ "${failures}" != "0" ]; then
-            echo "One or more promotion-owned checks failed."
+            echo "One or more non-integration promotion-owned checks failed."
             exit 1
           fi
+
+      - name: Run and report exact-head integration check
+        if: always() && steps.non_integration_checks.outputs.promotion_sha != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PROMOTION_SHA: ${{ steps.non_integration_checks.outputs.promotion_sha }}
+          ZOOM_ACCOUNT_ID: ${{ secrets.ZOOM_ACCOUNT_ID }}
+          ZOOM_CLIENT_ID: ${{ secrets.ZOOM_CLIENT_ID }}
+          ZOOM_CLIENT_SECRET: ${{ secrets.ZOOM_CLIENT_SECRET }}
+          ZOOM_BASE_URL: ${{ secrets.ZOOM_BASE_URL }}
+          ZOOM_OAUTH_URL: ${{ secrets.ZOOM_OAUTH_URL }}
+          ZOOM_TOKEN_SKEW_SECONDS: ${{ secrets.ZOOM_TOKEN_SKEW_SECONDS }}
+        run: |
+          set -euo pipefail
+
+          git checkout "${PROMOTION_SHA}"
+
+          for optional_name in \
+            ZOOM_BASE_URL \
+            ZOOM_OAUTH_URL \
+            ZOOM_TOKEN_SKEW_SECONDS
+          do
+            if [ -z "${!optional_name:-}" ]; then
+              unset "${optional_name}"
+            fi
+          done
+
+          log_file="$(mktemp)"
+          started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          check_id="$(gh api --method POST "repos/${GH_REPO}/check-runs" \
+            -f 'name=integration' \
+            -f "head_sha=${PROMOTION_SHA}" \
+            -f 'status=in_progress' \
+            -f "started_at=${started_at}" \
+            --jq '.id')"
+          conclusion="success"
+          if ! python -m pytest -m integration >"${log_file}" 2>&1; then
+            conclusion="failure"
+          fi
+          completed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          gh api --method PATCH "repos/${GH_REPO}/check-runs/${check_id}" \
+            -f 'status=completed' \
+            -f "conclusion=${conclusion}" \
+            -f "completed_at=${completed_at}" \
+            -f 'output[title]=integration' \
+            -f "output[summary]=Promotion workflow reported integration with conclusion ${conclusion}." \
+            -f "output[text]=$(tail -c 60000 "${log_file}")" >/dev/null
+          cat "${log_file}"
+          rm -f "${log_file}"
+          [ "${conclusion}" = "success" ]

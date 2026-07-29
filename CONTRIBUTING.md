@@ -89,6 +89,13 @@ The `unit` gate owns linting, typing, package builds, documentation, unit and
 contract tests, and the 95% coverage floor. The `security` gate owns dependency
 auditing. The `integration` gate owns live read-only Zoom smoke tests.
 
+Promotion jobs scope Zoom credential secrets to the live `integration` step.
+The promotion-owned `unit`, `security`, and `release-prep` checks must remain
+credential-free. When optional integration settings such as `ZOOM_BASE_URL`,
+`ZOOM_OAUTH_URL`, or `ZOOM_TOKEN_SKEW_SECONDS` are not configured as secrets,
+the workflow removes their empty GitHub Actions placeholders so the SDK's
+documented defaults remain active.
+
 Do not lower the coverage floor, weaken schema validation, or modify tests only
 to silence a failure. Update behavior, tests, documentation, and generated
 contracts together when intended behavior changes.
