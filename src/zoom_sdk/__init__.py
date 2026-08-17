@@ -25,7 +25,7 @@ from .logging import configure_logging
 from .schema import WebhookRegistry
 from .sdk import ZoomSdk
 
-__version__ = "1.0.1"
+__version__ = "1.1.0"
 
 __all__ = [
     "ZoomClient",

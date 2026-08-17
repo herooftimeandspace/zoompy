@@ -7,13 +7,56 @@ semantic-versioning policy for the public SDK surface.
 
 ## [Unreleased]
 
+### Added
+- `ZoomClient.request_raw_body(...)` and generated SDK operation
+  `.raw_body(...)` helpers for compatibility decoders that need SDK-owned
+  transport behavior before application-owned decoding and validation.
+- Focused contract coverage and consumer documentation for the generated Zoom
+  Phone users, common areas, shared line groups, and call queues readers.
+- Automated `dev -> staging -> main` promotion pull requests with fail-closed
+  semantic-version label resolution, synchronized Python version metadata,
+  exact-head promotion checks, and GitHub Release creation for wheel and source
+  artifacts.
+- A tested Python release helper for version bumps, source-PR label resolution,
+  unpromoted-range impact aggregation, and synchronized metadata updates.
+
 ### Changed
+- Successful validated and raw-body responses are now read through a 4 MiB
+  streaming limit.
+- Non-default `ZOOM_BASE_URL` and `base_url=` values now remain authoritative
+  over schema-declared operation servers, while the default Zoom base URL still
+  permits operation-specific server selection.
+- The six supported Python runtime environment variables now form an explicit,
+  tested configuration contract shared with `.env.example`; cross-language
+  parity guidance now requires behavior ports instead of foreign build or
+  parity variables.
+- CI now reports dependency auditing as a dedicated `security` check so branch
+  protection and promotion workflows can preserve the same Python quality
+  boundary on exact promotion heads.
 - CI now runs integration tests only for `staging` and `main`, while `dev` and
   ordinary feature work stay on the faster unit-quality path.
 - Documentation publishing now runs from a dedicated `workflow_run` pipeline
   that only deploys GitHub Pages after a successful `main` CI run.
 - Repository documentation now explains the intended promotion path:
   `dev -> staging -> main`.
+- Schema indexing now supports per-operation SDK overrides (`x-sdk.namespace`
+  and `x-sdk.alias`) to normalize future schema quirks without changing
+  synced official schemas.
+
+### Removed
+- Experimental PBX sideloaded routes, PBX base-URL configuration, and PBX
+  account-discovery logic. This API surface is unsupported and cannot be
+  relied on for stable SDK behavior.
+
+### Fixed
+- Staging-to-main promotion checks now keep Zoom credentials out of unit,
+  security, and release-preparation commands, while the live integration check
+  treats unconfigured optional Zoom settings as absent instead of injecting
+  empty runtime values.
+- Schema refreshes now use Zoom's current Chat publication path while
+  preserving the established Team Chat compatibility title, and explicitly
+  retain the last reviewed Zoom Docs schema after its canonical publication
+  was withdrawn.
 
 ## [1.0.1]
 

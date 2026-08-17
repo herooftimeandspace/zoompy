@@ -74,6 +74,7 @@ def copy_root_markdown() -> None:
         target_path = GENERATED_ROOT / target_name
         content = source_path.read_text(encoding="utf-8")
         content = content.replace("(./CHANGELOG.md)", "(changelog.md)")
+        content = content.replace("(./CONTRIBUTING.md)", "(contributing.md)")
         content = content.replace("(./.env.example)", "(env-example.md)")
         target_path.write_text(banner + content, encoding="utf-8")
 

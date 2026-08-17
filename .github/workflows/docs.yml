@@ -14,8 +14,6 @@ env:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
@@ -23,6 +21,9 @@ concurrency:
 
 jobs:
   build-docs:
+    permissions:
+      contents: read
+      pages: write
     if: |
       github.event_name == 'workflow_dispatch' ||
       (
@@ -32,15 +33,15 @@ jobs:
       )
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7  # TODO: pin to specific SHA for reproducibility
         if: github.event_name == 'workflow_run'
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7  # TODO: pin to specific SHA for reproducibility
         if: github.event_name == 'workflow_dispatch'
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7  # TODO: pin to specific SHA for reproducibility
         with:
           python-version: "3.14"
 
@@ -59,15 +60,19 @@ jobs:
           python -m mkdocs build --strict
 
       - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6  # TODO: pin to specific SHA for reproducibility
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5  # TODO: pin to specific SHA for reproducibility
         with:
           path: site
 
   deploy-docs:
     needs: build-docs
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     if: |
       needs.build-docs.result == 'success' &&
       (
@@ -84,4 +89,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5  # TODO: pin to specific SHA for reproducibility

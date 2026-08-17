@@ -9,6 +9,7 @@ confidence and still keep the behavior deterministic.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -232,3 +233,77 @@ def test_invalid_token_payload_is_logged_and_rejected(
 
     assert events[0]["event"] == "token_acquisition_failed"
     assert events[0]["error_type"] == "ValidationError"
+
+
+def test_fetch_rejects_non_bearer_token_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject successful OAuth payloads that advertise an unexpected token type."""
+
+    manager = _build_manager()
+    request = httpx.Request("POST", "https://zoom.example/oauth/token")
+    response = httpx.Response(
+        200,
+        json={
+            "access_token": "fresh-token",
+            "token_type": "mac",
+            "expires_in": 3600,
+        },
+        request=request,
+    )
+    monkeypatch.setattr(manager._http, "post", lambda *args, **kwargs: response)
+
+    try:
+        with pytest.raises(ValidationError, match="token_type"):
+            manager._fetch_token()
+    finally:
+        manager._http.close()
+
+
+def test_fetch_rejects_non_positive_expiry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject tokens that cannot be cached safely because they expire immediately."""
+
+    manager = _build_manager()
+    request = httpx.Request("POST", "https://zoom.example/oauth/token")
+    response = httpx.Response(
+        200,
+        json={
+            "access_token": "fresh-token",
+            "token_type": "bearer",
+            "expires_in": 0,
+        },
+        request=request,
+    )
+    monkeypatch.setattr(manager._http, "post", lambda *args, **kwargs: response)
+
+    try:
+        with pytest.raises(ValidationError, match="expires_in"):
+            manager._fetch_token()
+    finally:
+        manager._http.close()
+
+
+def test_get_access_token_rejects_tokens_expiring_before_skew_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Refuse to cache tokens that are already effectively expired."""
+
+    manager = _build_manager()
+    monkeypatch.setattr(
+        manager,
+        "_fetch_token",
+        lambda **kwargs: SimpleNamespace(
+            access_token="fresh-token",
+            token_type="bearer",
+            expires_in=30,
+        ),
+    )
+    monkeypatch.setattr("zoom_sdk.auth.time.time", lambda: 1000.0)
+
+    try:
+        with pytest.raises(ValueError, match="expires too soon"):
+            manager.get_access_token()
+    finally:
+        manager._http.close()

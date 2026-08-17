@@ -88,6 +88,8 @@ class SchemaOperation:
     responses: Mapping[str, Any]
     spec: Mapping[str, Any]
     server_url: str | None
+    sdk_namespace: tuple[str, ...] | None = None
+    sdk_alias: str | None = None
 
 
 @dataclass(frozen=True)
@@ -666,6 +668,8 @@ class PathOperationIndex:
                             responses=operation.get("responses", {}),
                             spec=spec,
                             server_url=server_url,
+                            sdk_namespace=self._extract_sdk_namespace(operation),
+                            sdk_alias=self._extract_sdk_alias(operation),
                         )
                         prefix = self._path_prefix(path)
                         self._operations_by_prefix.setdefault(prefix, []).append(entry)
@@ -705,6 +709,37 @@ class PathOperationIndex:
 
         parts = [part for part in path.split("/") if part]
         return f"/{parts[0]}" if parts else "/"
+
+    def _extract_sdk_namespace(
+        self,
+        operation: Mapping[str, Any],
+    ) -> tuple[str, ...] | None:
+        """Return an optional SDK namespace override from one operation."""
+
+        extension = operation.get("x-sdk")
+        if not isinstance(extension, Mapping):
+            return None
+
+        namespace = extension.get("namespace")
+        if isinstance(namespace, str):
+            parts = [part.strip() for part in namespace.split(".") if part.strip()]
+            return tuple(parts) or None
+        if isinstance(namespace, list):
+            parts = [part.strip() for part in namespace if isinstance(part, str) and part.strip()]
+            return tuple(parts) or None
+        return None
+
+    def _extract_sdk_alias(self, operation: Mapping[str, Any]) -> str | None:
+        """Return an optional SDK alias override from one operation."""
+
+        extension = operation.get("x-sdk")
+        if not isinstance(extension, Mapping):
+            return None
+
+        alias = extension.get("alias")
+        if isinstance(alias, str) and alias.strip():
+            return alias.strip()
+        return None
 
 
 class WebhookRegistry:
